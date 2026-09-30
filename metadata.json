@@ -1,0 +1,6 @@
+{
+  "name": "NEXO OS",
+  "description": "İşletmenizin dijital operasyon merkezi. QR Menü, Siparişler, CRM, Stok, Rezervasyon, Sadakat, POS, Teklifler, Personel ve Yapay Zeka.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
