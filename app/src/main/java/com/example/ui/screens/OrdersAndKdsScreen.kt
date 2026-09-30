@@ -37,7 +37,7 @@ fun OrdersAndKdsScreen() {
     var selectedOrderForDetail by remember { mutableStateOf<Order?>(null) }
 
     val filteredOrders = orders.filter { order ->
-        if (isKdsMode) {
+        order.businessId == business.id && if (isKdsMode) {
             // KDS mode only shows active in-progress orders
             order.status != OrderStatus.COMPLETED && order.status != OrderStatus.CANCELLED
         } else {

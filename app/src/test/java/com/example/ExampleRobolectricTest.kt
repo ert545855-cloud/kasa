@@ -121,4 +121,66 @@ class ExampleRobolectricTest {
     assertEquals(firstProduct.price * 2, order.total, 0.01)
     assertEquals(5, order.tableNumber)
   }
+
+  @Test
+  fun `verify prompt CUJ table 12 latte and cheesecake order with real time sync`() {
+    NexoRepository.resetToDemoData()
+    val cafe = NexoRepository.casaCafeBusiness
+    assertEquals("casa-cafe", cafe.slug)
+    assertEquals("casa-cafe.nexo.business", cafe.websiteDomain)
+
+    val products = NexoRepository.products.value.filter { it.businessId == cafe.id }
+    val latte = products.first { it.name == "Latte" }
+    val cheesecake = products.first { it.name == "Cheesecake" }
+
+    assertEquals(140.0, latte.price, 0.01)
+    assertEquals(140.0, cheesecake.price, 0.01)
+
+    // Customer scans Table 12 QR and submits order for 2x Latte + 1x Cheesecake
+    val cartInputs = listOf(
+      CartItemInput(productId = latte.id, quantity = 2),
+      CartItemInput(productId = cheesecake.id, quantity = 1)
+    )
+
+    val orderResult = NexoRepository.createCustomerOrder(
+      businessId = cafe.id,
+      tableNumber = 12,
+      cartItems = cartInputs,
+      customerName = "Masa 12 Misafiri",
+      customerPhone = "+905551234567",
+      notes = "Sıcak servis edilsin"
+    )
+
+    assertTrue("Customer order should be created", orderResult.isSuccess)
+    val order = orderResult.getOrNull()!!
+
+    // Total must be 420 TL
+    assertEquals(420.0, order.total, 0.01)
+    assertEquals(12, order.tableNumber)
+    assertEquals(com.example.data.model.OrderStatus.PENDING, order.status)
+    assertTrue("Order number starts with NX-", order.orderNumber.startsWith("NX-"))
+
+    // Real-time Push Notification was dispatched to restaurant mobile app
+    val notif = NexoRepository.latestPushNotification.value
+    assertNotNull("Push notification must be triggered", notif)
+    assertEquals("Table 12", notif?.tableInfo)
+    assertTrue(notif!!.totalAmountFormatted.contains("420"))
+
+    // Restaurant employee accepts the order in mobile app
+    NexoRepository.acceptLatestNotificationOrder()
+    val updatedOrderAccepted = NexoRepository.orders.value.first { it.id == order.id }
+    assertEquals(com.example.data.model.OrderStatus.ACCEPTED, updatedOrderAccepted.status)
+
+    // Status sync: PREPARING
+    NexoRepository.updateOrderStatus(order.id, com.example.data.model.OrderStatus.PREPARING)
+    assertEquals(com.example.data.model.OrderStatus.PREPARING, NexoRepository.orders.value.first { it.id == order.id }.status)
+
+    // Status sync: READY
+    NexoRepository.updateOrderStatus(order.id, com.example.data.model.OrderStatus.READY)
+    assertEquals(com.example.data.model.OrderStatus.READY, NexoRepository.orders.value.first { it.id == order.id }.status)
+
+    // Status sync: COMPLETED
+    NexoRepository.updateOrderStatus(order.id, com.example.data.model.OrderStatus.COMPLETED)
+    assertEquals(com.example.data.model.OrderStatus.COMPLETED, NexoRepository.orders.value.first { it.id == order.id }.status)
+  }
 }

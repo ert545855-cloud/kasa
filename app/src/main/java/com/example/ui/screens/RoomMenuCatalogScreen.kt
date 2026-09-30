@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -397,5 +398,5 @@ fun RoomMenuItemCard(
 }
 
 fun Modifier.scale(scale: Float): Modifier = this.then(
-    Modifier.padding((1 - scale) * 4.dp)
+    Modifier.padding(4.dp * (1f - scale))
 )

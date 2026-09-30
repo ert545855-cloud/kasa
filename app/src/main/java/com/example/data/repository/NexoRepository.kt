@@ -15,14 +15,16 @@ data class CartItemInput(
 
 object NexoRepository {
 
-    private val defaultBusinessId = "biz-casa-verde-01"
+    val defaultBusinessId = "biz-casa-cafe"
 
-    private val initialBusiness = Business(
+    val casaCafeBusiness = Business(
         id = defaultBusinessId,
-        name = "Casa Verde Restaurant",
-        slug = "casa-verde-restaurant",
-        businessType = BusinessType.RESTAURANT,
-        logoUrl = null,
+        name = "Casa Cafe",
+        slug = "casa-cafe",
+        businessType = BusinessType.CAFE,
+        websiteDomain = "casa-cafe.nexo.business",
+        brandColorHex = "#D97706",
+        tagline = "Özel Kahveler & Taze Lezzetler",
         phone = "+90 216 450 8899",
         address = "Kalamış Marina Cad. No: 12, Kadıköy, İstanbul",
         currency = "₺",
@@ -31,9 +33,50 @@ object NexoRepository {
         enabledModules = NexoModule.entries.toSet(),
         branches = listOf(
             Branch(id = "branch-01", name = "Kalamış Marina (Merkez)", address = "Kalamış Marina Cad. No: 12", isMain = true),
-            Branch(id = "branch-02", name = "Bodrum Yalıkavak Şubesi", address = "Yalıkavak Marina No: 4", isMain = false)
+            Branch(id = "branch-02", name = "Moda Şubesi", address = "Moda Cad. No: 44", isMain = false)
         )
     )
+
+    val istanbulCoffeeBusiness = Business(
+        id = "biz-istanbul-coffee",
+        name = "İstanbul Coffee Roastery",
+        slug = "istanbul-coffee",
+        businessType = BusinessType.CAFE,
+        websiteDomain = "istanbul-coffee.nexo.business",
+        brandColorHex = "#78350F",
+        tagline = "3. Nesil Nitelikli Kahve Kavurucusu",
+        phone = "+90 212 245 1020",
+        address = "Galata Kulesi Sok. No: 8, Beyoğlu, İstanbul",
+        currency = "₺",
+        language = "tr",
+        plan = PlanType.PRO,
+        enabledModules = NexoModule.entries.toSet(),
+        branches = listOf(
+            Branch(id = "branch-ist-01", name = "Galata Roastery", address = "Galata Kulesi Sok. No: 8", isMain = true)
+        )
+    )
+
+    val burgerHouseBusiness = Business(
+        id = "biz-burger-house",
+        name = "Burger House Co.",
+        slug = "burger-house",
+        businessType = BusinessType.RESTAURANT,
+        websiteDomain = "burger-house.nexo.business",
+        brandColorHex = "#DC2626",
+        tagline = "Smash Burgerler & El Yapımı Soslar",
+        phone = "+90 212 334 5566",
+        address = "Beşiktaş Çarşı No: 19, Beşiktaş, İstanbul",
+        currency = "₺",
+        language = "tr",
+        plan = PlanType.BUSINESS,
+        enabledModules = NexoModule.entries.toSet(),
+        branches = listOf(
+            Branch(id = "branch-bh-01", name = "Beşiktaş Çarşı", address = "Beşiktaş Çarşı No: 19", isMain = true)
+        )
+    )
+
+    private val initialBusiness = casaCafeBusiness
+    private val initialBusinessesList = listOf(casaCafeBusiness, istanbulCoffeeBusiness, burgerHouseBusiness)
 
     private val _activeTheme = MutableStateFlow(com.example.ui.theme.RestaurantTheme.MEDITERRANEAN)
     val activeTheme: StateFlow<com.example.ui.theme.RestaurantTheme> = _activeTheme.asStateFlow()
@@ -42,11 +85,28 @@ object NexoRepository {
         _activeTheme.value = theme
     }
 
-    private val _businesses = MutableStateFlow<List<Business>>(listOf(initialBusiness))
+    private val _businesses = MutableStateFlow<List<Business>>(initialBusinessesList)
     val businesses: StateFlow<List<Business>> = _businesses.asStateFlow()
 
     private val _activeBusinessId = MutableStateFlow(defaultBusinessId)
     val activeBusinessId: StateFlow<String> = _activeBusinessId.asStateFlow()
+
+    private val _latestPushNotification = MutableStateFlow<NexoPushNotification?>(null)
+    val latestPushNotification: StateFlow<NexoPushNotification?> = _latestPushNotification.asStateFlow()
+
+    fun dismissPushNotification() {
+        _latestPushNotification.value = null
+    }
+
+    fun acceptLatestNotificationOrder() {
+        val notif = _latestPushNotification.value ?: return
+        updateOrderStatus(notif.orderId, OrderStatus.ACCEPTED)
+        _latestPushNotification.value = null
+    }
+
+    fun getBusinessBySlug(slug: String): Business? {
+        return _businesses.value.firstOrNull { it.slug.equals(slug, ignoreCase = true) }
+    }
 
     private val _categories = MutableStateFlow<List<Category>>(emptyList())
     val categories: StateFlow<List<Category>> = _categories.asStateFlow()
@@ -236,8 +296,8 @@ object NexoRepository {
             return Result.failure(Exception("Geçerli ürün bulunamadı"))
         }
 
-        val orderCountForBiz = _orders.value.count { it.businessId == businessId } + 1
-        val orderNo = "ORD-${String.format("%04d", orderCountForBiz)}"
+        val orderCountForBiz = _orders.value.count { it.businessId == businessId }
+        val orderNo = "NX-${10482 + orderCountForBiz}"
 
         val newOrder = Order(
             businessId = businessId,
@@ -255,6 +315,27 @@ object NexoRepository {
         )
 
         _orders.value = listOf(newOrder) + _orders.value
+
+        // Update corresponding table status
+        if (tableNumber != null) {
+            val table = _tables.value.firstOrNull { it.businessId == businessId && it.tableNumber == tableNumber }
+            if (table != null) {
+                updateTableStatus(table.id, TableStatus.ORDER_PENDING)
+            }
+        }
+
+        // Dispatch real-time Push Notification to Restaurant Mobile App
+        val targetBiz = _businesses.value.firstOrNull { it.id == businessId } ?: initialBusiness
+        val pushNotif = NexoPushNotification(
+            businessId = businessId,
+            orderId = newOrder.id,
+            orderNumber = newOrder.orderNumber,
+            tableInfo = if (tableNumber != null) "Table $tableNumber" else "Paket Sipariş",
+            itemsSummary = orderItems.joinToString("\n") { "${it.quantity} × ${it.productName}" },
+            totalAmountFormatted = "${targetBiz.currency}${String.format("%.0f", newOrder.total)}",
+            total = newOrder.total
+        )
+        _latestPushNotification.value = pushNotif
 
         // Update customer statistics if known phone provided
         if (!customerPhone.isNullOrBlank()) {
@@ -289,7 +370,23 @@ object NexoRepository {
         val updated = order.copy(status = newStatus)
         _orders.value = _orders.value.map { if (it.id == orderId) updated else it }
 
-        // Deduct inventory when completed if items match stock
+        // Update corresponding table status
+        if (order.tableNumber != null) {
+            val table = _tables.value.firstOrNull { it.businessId == order.businessId && it.tableNumber == order.tableNumber }
+            if (table != null) {
+                val newTableStatus = when (newStatus) {
+                    OrderStatus.PENDING -> TableStatus.ORDER_PENDING
+                    OrderStatus.ACCEPTED -> TableStatus.OCCUPIED
+                    OrderStatus.PREPARING -> TableStatus.PREPARING
+                    OrderStatus.READY -> TableStatus.PREPARING
+                    OrderStatus.COMPLETED -> TableStatus.CLEANING
+                    OrderStatus.CANCELLED -> TableStatus.EMPTY
+                }
+                updateTableStatus(table.id, newTableStatus)
+            }
+        }
+
+        // Side-effects on completion: Deduct stock, log sale in analytics, update CRM
         if (newStatus == OrderStatus.COMPLETED) {
             order.items.forEach { item ->
                 val matchingStock = _stockItems.value.firstOrNull {
@@ -299,6 +396,13 @@ object NexoRepository {
                     adjustStock(matchingStock.id, -item.quantity.toDouble(), StockMovementType.SALE_ORDER, "Sipariş #${order.orderNumber}")
                 }
             }
+            createPosSale(
+                itemsSummary = order.items.joinToString(", ") { "${it.quantity}x ${it.productName}" },
+                amount = order.total,
+                method = PaymentMethod.CARD,
+                customerName = order.customerName,
+                bizId = order.businessId
+            )
         }
     }
 
@@ -449,12 +553,13 @@ object NexoRepository {
         itemsSummary: String,
         amount: Double,
         method: PaymentMethod,
-        customerName: String?
+        customerName: String?,
+        bizId: String? = null
     ): SaleRecord {
-        val bizId = _activeBusinessId.value
+        val targetBizId = bizId ?: _activeBusinessId.value
         val receiptNo = "FIS-${System.currentTimeMillis().toString().takeLast(6)}"
         val sale = SaleRecord(
-            businessId = bizId,
+            businessId = targetBizId,
             receiptNo = receiptNo,
             itemsSummary = itemsSummary,
             totalAmount = amount,
@@ -580,117 +685,105 @@ object NexoRepository {
     // ========================================================
 
     private fun loadSeedData(bizId: String) {
-        // Restaurant Categories
-        val catStarters = Category(id = "cat-starters", businessId = bizId, name = "Başlangıçlar & Mezeler", iconName = "Tapas", sortOrder = 1)
-        val catBurgers = Category(id = "cat-burgers", businessId = bizId, name = "Gurme Burgerler", iconName = "LunchDining", sortOrder = 2)
-        val catPizzas = Category(id = "cat-pizzas", businessId = bizId, name = "Taş Fırın Pizza", iconName = "LocalPizza", sortOrder = 3)
-        val catPastas = Category(id = "cat-pastas", businessId = bizId, name = "Ev Yapımı Makarna", iconName = "DinnerDining", sortOrder = 4)
-        val catGrill = Category(id = "cat-grill", businessId = bizId, name = "Izgaralar & Şef Spesiyalleri", iconName = "OutdoorGrill", sortOrder = 5)
-        val catDesserts = Category(id = "cat-dessert", businessId = bizId, name = "Tatlılar", iconName = "Cake", sortOrder = 6)
-        val catDrinks = Category(id = "cat-drinks", businessId = bizId, name = "İçecekler & Kahveler", iconName = "LocalCafe", sortOrder = 7)
+        val cafeBizId = defaultBusinessId
+        val istBizId = "biz-istanbul-coffee"
+        val burgerBizId = "biz-burger-house"
 
-        _categories.value = listOf(catStarters, catBurgers, catPizzas, catPastas, catGrill, catDesserts, catDrinks)
+        // Restaurant Categories across tenants
+        val cafeCategories = listOf(
+            Category(id = "cat-drinks", businessId = cafeBizId, name = "Kahveler & İçecekler", iconName = "LocalCafe", sortOrder = 1),
+            Category(id = "cat-dessert", businessId = cafeBizId, name = "Tatlılar & Fırın", iconName = "Cake", sortOrder = 2),
+            Category(id = "cat-burgers", businessId = cafeBizId, name = "Gurme Burger & Sandviç", iconName = "LunchDining", sortOrder = 3),
+            Category(id = "cat-pizzas", businessId = cafeBizId, name = "Taş Fırın Pizza", iconName = "LocalPizza", sortOrder = 4),
+            Category(id = "cat-pastas", businessId = cafeBizId, name = "Ev Yapımı Makarna", iconName = "DinnerDining", sortOrder = 5),
+            Category(id = "cat-starters", businessId = cafeBizId, name = "Başlangıç & Kahvaltı", iconName = "Tapas", sortOrder = 6)
+        )
 
-        _products.value = listOf(
+        val istCategories = listOf(
+            Category(id = "cat-ist-v60", businessId = istBizId, name = "Single Origin Demleme", iconName = "LocalCafe", sortOrder = 1),
+            Category(id = "cat-ist-espresso", businessId = istBizId, name = "Espresso Bar", iconName = "Coffee", sortOrder = 2),
+            Category(id = "cat-ist-pastry", businessId = istBizId, name = "Artisan Pastane", iconName = "Cake", sortOrder = 3)
+        )
+
+        val burgerCategories = listOf(
+            Category(id = "cat-bh-smash", businessId = burgerBizId, name = "Smash Burgerler", iconName = "LunchDining", sortOrder = 1),
+            Category(id = "cat-bh-sides", businessId = burgerBizId, name = "Çıtır Yan Lezzetler", iconName = "Tapas", sortOrder = 2),
+            Category(id = "cat-bh-drinks", businessId = burgerBizId, name = "Shake & İçecekler", iconName = "LocalCafe", sortOrder = 3)
+        )
+
+        _categories.value = cafeCategories + istCategories + burgerCategories
+
+        // Multi-tenant Products
+        val cafeProducts = listOf(
+            Product(
+                id = "prod-latte",
+                businessId = cafeBizId,
+                categoryId = "cat-drinks",
+                name = "Latte",
+                description = "Taze çekilmiş espresso ve kadifemsi sıcak barista sütü köpüğü",
+                price = 140.0,
+                ingredientCost = 25.0,
+                isFeatured = true,
+                allergens = listOf("Laktoz"),
+                recipe = listOf(
+                    RecipeIngredient("Barista Sütü", "200 ml", 7.0),
+                    RecipeIngredient("Arabica Espresso", "18 gr", 12.0)
+                )
+            ),
+            Product(
+                id = "prod-cheesecake",
+                businessId = cafeBizId,
+                categoryId = "cat-dessert",
+                name = "Cheesecake",
+                description = "San Sebastian yanık cheesecake, Belçika çikolatası sosu ile",
+                price = 140.0,
+                ingredientCost = 35.0,
+                isFeatured = true,
+                allergens = listOf("Gluten", "Laktoz", "Yumurta"),
+                recipe = listOf(
+                    RecipeIngredient("Cheesecake Dilimi", "1 porsiyon", 28.0),
+                    RecipeIngredient("Belçika Çikolatası", "30 gr", 7.0)
+                ),
+                options = listOf(
+                    ProductOption(name = "Ekstra Sıcak Çikolata", priceDiff = 25.0)
+                )
+            ),
             Product(
                 id = "prod-01",
-                businessId = bizId,
+                businessId = cafeBizId,
                 categoryId = "cat-burgers",
                 name = "Trüflü Dana Burger (180 gr)",
                 description = "Dinlendirilmiş dana kaburga kıyması, karamelize soğan, çift kat cheddar ve trüflü mayonez",
                 price = 295.0,
                 ingredientCost = 82.0,
                 isFeatured = true,
-                allergens = listOf("Gluten", "Laktoz", "Yumurta"),
-                recipe = listOf(
-                    RecipeIngredient("Dana Kıyması (180g)", "180 gr", 52.0),
-                    RecipeIngredient("Brioche Ekmek", "1 adet", 12.0),
-                    RecipeIngredient("Cheddar Peyniri", "2 dilim", 10.0),
-                    RecipeIngredient("Trüf Mayonez & Karamel Soğan", "40 gr", 8.0)
-                ),
-                options = listOf(
-                    ProductOption(name = "Ekstra Çıtır Patates", priceDiff = 35.0),
-                    ProductOption(name = "Ekstra Füme Kaburga", priceDiff = 55.0)
-                )
+                allergens = listOf("Gluten", "Laktoz", "Yumurta")
             ),
             Product(
                 id = "prod-02",
-                businessId = bizId,
+                businessId = cafeBizId,
                 categoryId = "cat-pizzas",
                 name = "Margherita Verace Pizza",
                 description = "San Marzano domates sosu, manda mozzarella, taze fesleğen ve sızma zeytinyağı",
                 price = 260.0,
                 ingredientCost = 58.0,
                 isFeatured = true,
-                allergens = listOf("Gluten", "Laktoz"),
-                recipe = listOf(
-                    RecipeIngredient("Ekşi Maya Pizza Hamuru", "250 gr", 14.0),
-                    RecipeIngredient("San Marzano Domates", "90 gr", 12.0),
-                    RecipeIngredient("Manda Mozzarella", "120 gr", 26.0),
-                    RecipeIngredient("Fesleğen & Zeytinyağı", "20 ml", 6.0)
-                )
+                allergens = listOf("Gluten", "Laktoz")
             ),
             Product(
                 id = "prod-03",
-                businessId = bizId,
+                businessId = cafeBizId,
                 categoryId = "cat-pastas",
                 name = "Deniz Mahsüllü Linguine",
                 description = "Karides, kalamar, midye, çeri domates ve beyaz şarap sarımsak sosu ile",
                 price = 360.0,
                 ingredientCost = 96.0,
                 isFeatured = true,
-                allergens = listOf("Gluten", "Kabuklu Deniz Canlısı"),
-                recipe = listOf(
-                    RecipeIngredient("Taze Yumurtalı Linguine", "160 gr", 18.0),
-                    RecipeIngredient("Karides & Kalamar", "120 gr", 65.0),
-                    RecipeIngredient("Sarımsak & Çeri Sos", "60 gr", 13.0)
-                )
-            ),
-            Product(
-                id = "prod-04",
-                businessId = bizId,
-                categoryId = "cat-grill",
-                name = "Izgara Somon Fileto (220 gr)",
-                description = "Taze kuşkonmaz sote, fırınlanmış bebek patates ve kapari tereyağı sosu",
-                price = 420.0,
-                ingredientCost = 145.0,
-                isFeatured = true,
-                allergens = listOf("Balık", "Laktoz"),
-                recipe = listOf(
-                    RecipeIngredient("Norveç Somon Fileto", "220 gr", 115.0),
-                    RecipeIngredient("Taze Kuşkonmaz", "4 dal", 18.0),
-                    RecipeIngredient("Bebek Patates & Kapari Sos", "100 gr", 12.0)
-                )
-            ),
-            Product(
-                id = "prod-05",
-                businessId = bizId,
-                categoryId = "cat-starters",
-                name = "Akdeniz Burrata & İncir",
-                description = "Taze İtalyan burrata peyniri, fırın incir, ceviz, taze roka ve nar ekşili balzamik glaze",
-                price = 240.0,
-                ingredientCost = 65.0,
-                isFeatured = false,
-                allergens = listOf("Laktoz", "Ceviz")
-            ),
-            Product(
-                id = "prod-06",
-                businessId = bizId,
-                categoryId = "cat-dessert",
-                name = "San Sebastian Cheesecake",
-                description = "Karamelize üst yüzey, akışkan fırın içi ve Belçika çikolatası sosu ile",
-                price = 185.0,
-                ingredientCost = 38.0,
-                isFeatured = true,
-                allergens = listOf("Gluten", "Yumurta", "Laktoz"),
-                options = listOf(
-                    ProductOption(name = "Ekstra Sıcak Çikolata Sosu", priceDiff = 35.0),
-                    ProductOption(name = "Antep Fıstığı Parçacıkları", priceDiff = 40.0)
-                )
+                allergens = listOf("Gluten", "Kabuklu Deniz Canlısı")
             ),
             Product(
                 id = "prod-07",
-                businessId = bizId,
+                businessId = cafeBizId,
                 categoryId = "cat-drinks",
                 name = "Iced Salted Caramel Latte",
                 description = "Espresso, soğuk süt, buz ve ev yapımı tuzlu karamel sosu katmanı",
@@ -701,34 +794,143 @@ object NexoRepository {
             )
         )
 
-        // 20 Visual Restaurant Tables
-        val demoStatuses = listOf(
-            TableStatus.OCCUPIED, TableStatus.EMPTY, TableStatus.ORDER_PENDING, TableStatus.EMPTY,
-            TableStatus.PREPARING, TableStatus.BILL_REQUESTED, TableStatus.EMPTY, TableStatus.OCCUPIED,
-            TableStatus.EMPTY, TableStatus.EMPTY, TableStatus.BILL_REQUESTED, TableStatus.OCCUPIED,
-            TableStatus.RESERVED, TableStatus.EMPTY, TableStatus.PREPARING, TableStatus.EMPTY,
-            TableStatus.RESERVED, TableStatus.RESERVED, TableStatus.CLEANING, TableStatus.EMPTY
+        val istProducts = listOf(
+            Product(
+                id = "prod-ist-v60",
+                businessId = istBizId,
+                categoryId = "cat-ist-v60",
+                name = "V60 Filtre Kahve (Etiyopya)",
+                description = "Floral, bergamot ve şeftali notaları barındıran taze hasat çekirdek",
+                price = 160.0,
+                isFeatured = true
+            ),
+            Product(
+                id = "prod-ist-cortado",
+                businessId = istBizId,
+                categoryId = "cat-ist-espresso",
+                name = "Cortado",
+                description = "Eşit oranda duble ristretto espresso ve buharda ısıtılmış süt",
+                price = 130.0,
+                isFeatured = true
+            ),
+            Product(
+                id = "prod-ist-cheesecake",
+                businessId = istBizId,
+                categoryId = "cat-ist-pastry",
+                name = "Lotus Biscoff Cheesecake",
+                description = "Karamelize bisküvi tabanı ve yoğun lotus kreması",
+                price = 165.0,
+                isFeatured = true
+            )
         )
 
-        _tables.value = (1..20).map { num ->
-            val st = demoStatuses.getOrElse(num - 1) { TableStatus.EMPTY }
-            val cap = if (num % 5 == 0) 6 else if (num % 2 == 0) 4 else 2
+        val burgerProducts = listOf(
+            Product(
+                id = "prod-bh-smash",
+                businessId = burgerBizId,
+                categoryId = "cat-bh-smash",
+                name = "Double Smash Cheeseburger",
+                description = "2x 100gr ezilmiş sulu köfte, eritilmiş Amerikan cheddar, özel relish sos",
+                price = 320.0,
+                isFeatured = true
+            ),
+            Product(
+                id = "prod-bh-truffle",
+                businessId = burgerBizId,
+                categoryId = "cat-bh-smash",
+                name = "Truffle Mushroom Burger",
+                description = "Tütsülenmiş dana bacon, karamelize mantar ve trüf mayonez",
+                price = 360.0,
+                isFeatured = true
+            ),
+            Product(
+                id = "prod-bh-fries",
+                businessId = burgerBizId,
+                categoryId = "cat-bh-sides",
+                name = "Cajun Baharatlı Patates",
+                description = "Çıtır fırınlanmış patates dilimleri, özel sarımsaklı dip sos",
+                price = 110.0,
+                isFeatured = false
+            ),
+            Product(
+                id = "prod-bh-shake",
+                businessId = burgerBizId,
+                categoryId = "cat-bh-drinks",
+                name = "Craft Çilekli Milkshake",
+                description = "Gerçek Maraş dondurması ve taze çilek püresi",
+                price = 150.0,
+                isFeatured = true
+            )
+        )
+
+        _products.value = cafeProducts + istProducts + burgerProducts
+
+        // Tables for Casa Cafe (including Table 12)
+        val cafeTables = (1..20).map { num ->
             TableQr(
-                businessId = bizId,
+                id = "tbl-casa-$num",
+                businessId = cafeBizId,
                 tableNumber = num,
                 label = "Masa $num",
-                secureToken = "tk-m$num-casa88",
-                status = st,
-                capacity = cap,
-                qrDesignColor = "#0284C7"
+                secureToken = "tk-casa-$num",
+                status = if (num == 12) TableStatus.EMPTY else if (num % 3 == 0) TableStatus.OCCUPIED else TableStatus.EMPTY,
+                capacity = if (num == 12) 4 else if (num % 2 == 0) 4 else 2,
+                qrDesignColor = "#D97706"
             )
         }
+
+        val istTables = (1..10).map { num ->
+            TableQr(
+                id = "tbl-ist-$num",
+                businessId = istBizId,
+                tableNumber = num,
+                label = "Masa $num",
+                secureToken = "tk-ist-$num",
+                status = TableStatus.EMPTY,
+                capacity = 2,
+                qrDesignColor = "#78350F"
+            )
+        }
+
+        val burgerTables = (1..15).map { num ->
+            TableQr(
+                id = "tbl-bh-$num",
+                businessId = burgerBizId,
+                tableNumber = num,
+                label = "Masa $num",
+                secureToken = "tk-bh-$num",
+                status = TableStatus.EMPTY,
+                capacity = 4,
+                qrDesignColor = "#DC2626"
+            )
+        }
+
+        _tables.value = cafeTables + istTables + burgerTables
+
+        // Initial Orders
+        _orders.value = listOf(
+            Order(
+                id = "ord-initial-01",
+                businessId = cafeBizId,
+                orderNumber = "ORD-0001",
+                tableNumber = 5,
+                customerName = "Masa 5 - Canan Hanım",
+                items = listOf(
+                    OrderItem(productId = "prod-latte", productName = "Latte", unitPrice = 140.0, quantity = 1, total = 140.0),
+                    OrderItem(productId = "prod-cheesecake", productName = "Cheesecake", unitPrice = 140.0, quantity = 1, total = 140.0)
+                ),
+                subtotal = 280.0,
+                total = 280.0,
+                status = OrderStatus.COMPLETED,
+                paymentMethod = PaymentMethod.CARD
+            )
+        )
 
         // Demo Customers
         _customers.value = listOf(
             Customer(
                 id = "cust-01",
-                businessId = bizId,
+                businessId = cafeBizId,
                 name = "Canan Yılmaz",
                 phone = "+90 532 111 2233",
                 email = "canan@example.com",
@@ -741,159 +943,59 @@ object NexoRepository {
             ),
             Customer(
                 id = "cust-02",
-                businessId = bizId,
+                businessId = cafeBizId,
                 name = "Mehmet Kaya",
                 phone = "+90 544 333 4455",
                 email = "mehmet@techcorp.com",
                 tags = listOf("Kurumsal", "Hafta İçi"),
-                notes = "Öğle toplantıları için 4-6 kişilik masa rezerve ediyor.",
+                notes = "Öğle toplantıları için masa rezerve ediyor.",
                 totalSpent = 5200.0,
                 orderCount = 12,
                 loyaltyPoints = 520,
                 lastOrderAt = System.currentTimeMillis() - 86400000
-            ),
-            Customer(
-                id = "cust-03",
-                businessId = bizId,
-                name = "Selin Demir",
-                phone = "+90 555 777 8899",
-                email = "selin@studio.design",
-                tags = listOf("Yeni Müşteri"),
-                notes = "San Sebastian cheesecake müdavimi.",
-                totalSpent = 680.0,
-                orderCount = 3,
-                loyaltyPoints = 68,
-                lastOrderAt = System.currentTimeMillis() - 172800000
             )
         )
 
-        // Demo Orders
-        _orders.value = listOf(
-            Order(
-                id = "ord-101",
-                businessId = bizId,
-                orderNumber = "ORD-0001",
-                tableNumber = 3,
-                customerName = "Masa 3 - Selin Hanım",
-                items = listOf(
-                    OrderItem(productId = "prod-06", productName = "San Sebastian Cheesecake", unitPrice = 185.0, quantity = 1, total = 185.0),
-                    OrderItem(productId = "prod-05", productName = "Iced Latte", variantName = "Orta (Double)", unitPrice = 140.0, quantity = 1, total = 140.0)
-                ),
-                subtotal = 325.0,
-                total = 325.0,
-                status = OrderStatus.PENDING,
-                notes = "Çikolata sosu sıcak ve ayrı kapta rica ediliyor."
-            ),
-            Order(
-                id = "ord-102",
-                businessId = bizId,
-                orderNumber = "ORD-0002",
-                tableNumber = 5,
-                customerName = "Masa 5 - Canan Hanım",
-                items = listOf(
-                    OrderItem(productId = "prod-03", productName = "Caffe Latte", variantName = "Büyük (Venti)", selectedOptions = listOf("Yulaf Sütü"), unitPrice = 160.0, quantity = 2, total = 320.0),
-                    OrderItem(productId = "prod-08", productName = "Tereyağlı Kruvasan", unitPrice = 120.0, quantity = 2, total = 240.0)
-                ),
-                subtotal = 560.0,
-                total = 560.0,
-                status = OrderStatus.PREPARING
-            ),
-            Order(
-                id = "ord-103",
-                businessId = bizId,
-                orderNumber = "ORD-0003",
-                tableNumber = 1,
-                customerName = "Masa 1",
-                items = listOf(
-                    OrderItem(productId = "prod-01", productName = "Espresso", variantName = "Double", unitPrice = 100.0, quantity = 2, total = 200.0)
-                ),
-                subtotal = 200.0,
-                total = 200.0,
-                status = OrderStatus.READY
-            ),
-            Order(
-                id = "ord-104",
-                businessId = bizId,
-                orderNumber = "ORD-0004",
-                tableNumber = 8,
-                customerName = "Masa 8",
-                items = listOf(
-                    OrderItem(productId = "prod-04", productName = "Cappuccino", unitPrice = 115.0, quantity = 1, total = 115.0),
-                    OrderItem(productId = "prod-07", productName = "Fudge Brownie", unitPrice = 160.0, quantity = 1, total = 160.0)
-                ),
-                subtotal = 275.0,
-                total = 275.0,
-                status = OrderStatus.COMPLETED,
-                paymentMethod = PaymentMethod.CARD
-            )
-        )
-
-        // Demo Stock Items
+        // Demo Stock
         _stockItems.value = listOf(
             StockItem(
                 id = "stk-01",
-                businessId = bizId,
+                businessId = cafeBizId,
                 sku = "KAF-ARB-1KG",
                 name = "Arabica Kahve Çekirdeği (1 Kg)",
                 category = "Hammadde",
                 purchasePrice = 380.0,
                 sellingPrice = 750.0,
-                stockQuantity = 4.5,
-                minimumStock = 10.0,
+                stockQuantity = 8.5,
+                minimumStock = 5.0,
                 unit = "Kg",
                 supplier = "İstanbul Kahve İthalat A.Ş."
             ),
             StockItem(
                 id = "stk-02",
-                businessId = bizId,
-                sku = "SUT-TAM-1LT",
-                name = "Barista Tam Yağlı Süt (1 L)",
-                category = "Süt Ürünleri",
-                purchasePrice = 28.5,
-                sellingPrice = 60.0,
-                stockQuantity = 8.0,
+                businessId = cafeBizId,
+                sku = "SUT-BAR-1L",
+                name = "Barista Sütü",
+                category = "İçecek Malzemesi",
+                purchasePrice = 28.0,
+                sellingPrice = 45.0,
+                stockQuantity = 32.0,
                 minimumStock = 15.0,
                 unit = "Litre",
-                supplier = "Sütaş Kurumsal"
+                supplier = "Taze Çiftlik Süt"
             ),
             StockItem(
                 id = "stk-03",
-                businessId = bizId,
-                sku = "SUT-YUL-1LT",
-                name = "Barista Yulaf Sütü (1 L)",
-                category = "Bitkisel Süt",
-                purchasePrice = 65.0,
-                sellingPrice = 130.0,
+                businessId = cafeBizId,
+                sku = "TAT-CHK-POR",
+                name = "San Sebastian Cheesecake Porsiyon",
+                category = "Pastane",
+                purchasePrice = 40.0,
+                sellingPrice = 140.0,
                 stockQuantity = 22.0,
                 minimumStock = 8.0,
-                unit = "Litre",
-                supplier = "Oatly Distribütör"
-            ),
-            StockItem(
-                id = "stk-04",
-                businessId = bizId,
-                sku = "TAT-SAN-TEK",
-                name = "Hazır San Sebastian Cheesecake Porsiyon",
-                category = "Tatlı",
-                purchasePrice = 85.0,
-                sellingPrice = 185.0,
-                stockQuantity = 3.0,
-                minimumStock = 6.0,
-                unit = "Porsiyon",
-                supplier = "Artisan Pastane Atölyesi"
-            ),
-            StockItem(
-                id = "stk-05",
-                businessId = bizId,
-                sku = "FIR-KRU-DON",
-                name = "Dondurulmuş Fransız Kruvasan",
-                category = "Unlu Mamul",
-                purchasePrice = 45.0,
-                sellingPrice = 120.0,
-                stockQuantity = 35.0,
-                minimumStock = 15.0,
                 unit = "Adet",
-                supplier = "BakeArt Bakery"
+                supplier = "Gourmet Fırın Atölyesi"
             )
         )
 

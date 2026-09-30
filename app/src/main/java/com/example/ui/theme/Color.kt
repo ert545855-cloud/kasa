@@ -156,3 +156,4 @@ val NexoDarkTextPrimary = NexoTextPrimary
 val NexoDarkTextSecondary = NexoTextSecondary
 val NexoDarkTextMuted = NexoTextMuted
 val NexoDarkBorder = NexoBorderLight
+val NexoDarkSurface = Color(0xFF1F2937)

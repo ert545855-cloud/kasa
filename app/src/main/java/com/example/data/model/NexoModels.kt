@@ -95,7 +95,22 @@ data class Business(
     val aiCreditsUsed: Int = 18,
     val branches: List<Branch> = listOf(Branch(name = "Merkez Şube", address = "Kadıköy, İstanbul", isMain = true)),
     val isSuspended: Boolean = false,
+    val websiteDomain: String = "$slug.nexo.business",
+    val brandColorHex: String = "#D97706",
+    val tagline: String = "Özel Kahveler & Taze Lezzetler",
     val createdAt: Long = System.currentTimeMillis()
+)
+
+data class NexoPushNotification(
+    val id: String = UUID.randomUUID().toString(),
+    val businessId: String,
+    val orderId: String,
+    val orderNumber: String,
+    val tableInfo: String,
+    val itemsSummary: String,
+    val totalAmountFormatted: String,
+    val total: Double,
+    val timestamp: Long = System.currentTimeMillis()
 )
 
 data class Branch(

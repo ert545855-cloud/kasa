@@ -1,6 +1,10 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,12 +22,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Order
+import com.example.data.model.OrderStatus
 import com.example.data.model.Product
-import com.example.data.model.TableQr
+import com.example.data.model.TableStatus
 import com.example.data.repository.CartItemInput
 import com.example.data.repository.NexoRepository
 import com.example.ui.components.StatusBadge
@@ -47,16 +54,26 @@ data class CustomerCartItem(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CustomerMenuScreen(
-    initialTableNumber: Int = 3,
+    initialTableNumber: Int = 12,
     onBackToDashboard: () -> Unit
 ) {
-    val business = NexoRepository.getActiveBusiness()
-    val categories by NexoRepository.categories.collectAsState()
-    val products by NexoRepository.products.collectAsState()
-    val tables by NexoRepository.tables.collectAsState()
-    val orders by NexoRepository.orders.collectAsState()
+    val allBusinesses by NexoRepository.businesses.collectAsState()
+    val allCategories by NexoRepository.categories.collectAsState()
+    val allProducts by NexoRepository.products.collectAsState()
+    val allOrders by NexoRepository.orders.collectAsState()
 
-    var selectedTableNum by remember { mutableIntStateOf(initialTableNumber) }
+    var activeWebsiteBusinessId by remember {
+        mutableStateOf(NexoRepository.getActiveBusiness().id)
+    }
+
+    val currentBiz = allBusinesses.firstOrNull { it.id == activeWebsiteBusinessId }
+        ?: NexoRepository.getActiveBusiness()
+
+    val tenantCategories = allCategories.filter { it.businessId == currentBiz.id }
+    val tenantProducts = allProducts.filter { it.businessId == currentBiz.id }
+    val tenantOrders = allOrders.filter { it.businessId == currentBiz.id }
+
+    var selectedTableNum by remember { mutableIntStateOf(if (initialTableNumber > 0) initialTableNumber else 12) }
     var selectedCategoryId by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
 
@@ -68,12 +85,16 @@ fun CustomerMenuScreen(
     var customerPhoneInput by remember { mutableStateOf("") }
     var orderNotesInput by remember { mutableStateOf("") }
 
-    var lastPlacedOrder by remember { mutableStateOf<Order?>(null) }
-    var orderSuccessDialog by remember { mutableStateOf(false) }
+    var lastPlacedOrderId by remember { mutableStateOf<String?>(null) }
+    var showTenantSwitcherDialog by remember { mutableStateOf(false) }
+    var showTablePickerDialog by remember { mutableStateOf(false) }
 
-    val activeCategory = selectedCategoryId ?: categories.firstOrNull()?.id
+    // Real-time order tracker subscription (Zero page refresh needed!)
+    val liveActiveOrder = tenantOrders.firstOrNull { it.id == lastPlacedOrderId }
 
-    val filteredProducts = products.filter {
+    val activeCategory = selectedCategoryId ?: tenantCategories.firstOrNull()?.id
+
+    val filteredProducts = tenantProducts.filter {
         (activeCategory == null || it.categoryId == activeCategory) &&
         (searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true) || it.description.contains(searchQuery, ignoreCase = true))
     }
@@ -81,56 +102,161 @@ fun CustomerMenuScreen(
     val cartTotal = cartItems.sumOf { it.totalPrice }
     val cartCount = cartItems.sumOf { it.quantity }
 
+    val brandAccentColor = try {
+        Color(android.graphics.Color.parseColor(currentBiz.brandColorHex))
+    } catch (e: Exception) {
+        MaterialTheme.colorScheme.primary
+    }
+
     Scaffold(
         topBar = {
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 3.dp,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+                // Public Browser Address Simulation Bar (casa-cafe.nexo.business)
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = onBackToDashboard,
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri", modifier = Modifier.size(18.dp))
+                                }
+                                Text(
+                                    text = "Müşteri Web Sitesi",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = NexoTextSecondary
+                                )
+                            }
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                // Restaurant Switcher button
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = brandAccentColor.copy(alpha = 0.15f),
+                                    modifier = Modifier.clickable { showTenantSwitcherDialog = true }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Storefront, contentDescription = null, tint = brandAccentColor, modifier = Modifier.size(13.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(currentBiz.name, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = brandAccentColor)
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = brandAccentColor, modifier = Modifier.size(14.dp))
+                                    }
+                                }
+
+                                // Table selector button
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = NexoIndigoPrimary.copy(alpha = 0.15f),
+                                    modifier = Modifier.clickable { showTablePickerDialog = true }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.QrCode2, contentDescription = null, tint = NexoIndigoLight, modifier = Modifier.size(13.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Masa $selectedTableNum", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = NexoIndigoLight)
+                                    }
+                                }
+                            }
+                        }
+
+                        // URL input bar
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, NexoBorderSubtle),
+                            modifier = Modifier.fillMaxWidth().height(32.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Lock, contentDescription = "SSL Secure", tint = NexoEmeraldLight, modifier = Modifier.size(13.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "https://${currentBiz.websiteDomain}/?table=$selectedTableNum",
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = NexoTextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "Yenile",
+                                    tint = NexoTextSecondary,
+                                    modifier = Modifier.size(14.dp).clickable {
+                                        searchQuery = ""
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Restaurant Public Header & Search
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = onBackToDashboard) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri")
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(brandAccentColor),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    currentBiz.name.take(1),
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 18.sp
+                                )
                             }
+                            Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = business.name,
+                                    text = currentBiz.name,
                                     style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                                 Text(
-                                    text = "Müşteri QR Dijital Menü",
+                                    text = currentBiz.tagline,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = NexoEmeraldLight
+                                    color = NexoTextSecondary
                                 )
                             }
                         }
 
-                        // Table selector chip
                         Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = NexoIndigoPrimary.copy(alpha = 0.15f),
-                            border = ButtonDefaults.outlinedButtonBorder
+                            shape = RoundedCornerShape(20.dp),
+                            color = brandAccentColor.copy(alpha = 0.15f)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.TableRestaurant, contentDescription = null, tint = NexoIndigoLight, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Masa $selectedTableNum",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    color = NexoIndigoLight
-                                )
-                            }
+                            Text(
+                                text = "Masa $selectedTableNum",
+                                color = brandAccentColor,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
                         }
                     }
 
@@ -140,11 +266,11 @@ fun CustomerMenuScreen(
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder = { Text("Ürün veya tatlı ara...", fontSize = 13.sp) },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        placeholder = { Text("Menüde ara (Örn: Latte, Cheesecake, Burger)...", fontSize = 12.sp) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp)) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(48.dp)
+                            .height(46.dp)
                             .testTag("customer_menu_search"),
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp)
@@ -157,32 +283,33 @@ fun CustomerMenuScreen(
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
                     tonalElevation = 8.dp,
+                    border = BorderStroke(1.dp, NexoBorderSubtle),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column {
                             Text(
-                                text = "$cartCount Ürün Seçildi",
+                                text = "$cartCount Ürün Sepette",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = NexoDarkTextSecondary
+                                color = NexoTextSecondary
                             )
                             Text(
-                                text = "%.2f %s".format(cartTotal, business.currency),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
+                                text = "%.0f %s".format(cartTotal, currentBiz.currency),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = brandAccentColor
                             )
                         }
 
                         Button(
                             onClick = { showCartSheet = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = NexoEmeraldDark),
+                            colors = ButtonDefaults.buttonColors(containerColor = brandAccentColor),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.testTag("open_cart_sheet_button")
                         ) {
@@ -204,26 +331,96 @@ fun CustomerMenuScreen(
         ) {
             item { Spacer(modifier = Modifier.height(4.dp)) }
 
-            // Active order tracker banner if an order is active
-            if (lastPlacedOrder != null) {
+            // ========================================================
+            // 1. REAL-TIME ORDER STATUS SYNCHRONIZATION CARD (CUJ)
+            // ========================================================
+            if (liveActiveOrder != null) {
                 item {
-                    val currentOrder = orders.firstOrNull { it.id == lastPlacedOrder?.id } ?: lastPlacedOrder!!
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = NexoIndigoPrimary.copy(alpha = 0.15f)),
-                        border = ButtonDefaults.outlinedButtonBorder
-                    ) {
+                    RealTimeOrderTrackerCard(
+                        order = liveActiveOrder,
+                        currency = currentBiz.currency,
+                        onDismiss = { lastPlacedOrderId = null }
+                    )
+                }
+            }
+
+            // ========================================================
+            // 2. 1-CLICK PROMPT TEST ORDER (CUJ SHORTCUT)
+            // ========================================================
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("one_click_test_order_card"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = brandAccentColor.copy(alpha = 0.08f)),
+                    border = BorderStroke(1.dp, brandAccentColor.copy(alpha = 0.35f))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
                         Row(
-                            modifier = Modifier.padding(14.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Canlı Siparişiniz (#${currentOrder.orderNumber})", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                Text("${currentOrder.items.size} çeşit ürün hazırlanıyor", fontSize = 11.sp, color = NexoDarkTextSecondary)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Bolt, contentDescription = null, tint = brandAccentColor, modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Prompt Senaryosu Hızlı Test (Masa $selectedTableNum)",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = brandAccentColor
+                                )
                             }
-                            StatusBadge(status = currentOrder.status)
+                            Surface(shape = RoundedCornerShape(6.dp), color = brandAccentColor.copy(alpha = 0.15f)) {
+                                Text("CANLI SENKRON", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = brandAccentColor, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "• 2 × Latte (₺280)\n• 1 × Cheesecake (₺140)\nToplam: ₺420 (Masa $selectedTableNum)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = {
+                                val latte = tenantProducts.firstOrNull { it.id == "prod-latte" }
+                                    ?: tenantProducts.firstOrNull { it.name.contains("Latte", ignoreCase = true) }
+                                    ?: tenantProducts.first()
+
+                                val cheesecake = tenantProducts.firstOrNull { it.id == "prod-cheesecake" }
+                                    ?: tenantProducts.firstOrNull { it.name.contains("Cheesecake", ignoreCase = true) }
+                                    ?: tenantProducts.last()
+
+                                val testInputs = listOf(
+                                    CartItemInput(productId = latte.id, quantity = 2),
+                                    CartItemInput(productId = cheesecake.id, quantity = 1)
+                                )
+
+                                val result = NexoRepository.createCustomerOrder(
+                                    businessId = currentBiz.id,
+                                    tableNumber = selectedTableNum,
+                                    cartItems = testInputs,
+                                    customerName = "Masa $selectedTableNum Misafiri",
+                                    customerPhone = "+90 532 999 1048",
+                                    notes = "Kahveler sıcak olsun lütfen"
+                                )
+                                result.onSuccess { order ->
+                                    lastPlacedOrderId = order.id
+                                    cartItems.clear()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = brandAccentColor),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().height(40.dp).testTag("quick_order_latte_cheesecake_btn")
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("SİPARİŞ VER (2x Latte, 1x Cheesecake • ₺420)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -235,7 +432,7 @@ fun CustomerMenuScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    items(categories) { cat ->
+                    items(tenantCategories) { cat ->
                         val isSelected = cat.id == activeCategory
                         FilterChip(
                             selected = isSelected,
@@ -247,7 +444,7 @@ fun CustomerMenuScreen(
                                 )
                             },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = NexoIndigoPrimary,
+                                selectedContainerColor = brandAccentColor,
                                 selectedLabelColor = Color.White
                             )
                         )
@@ -260,9 +457,11 @@ fun CustomerMenuScreen(
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { showProductModal = prod },
+                        .clickable { showProductModal = prod }
+                        .testTag("product_card_${prod.id}"),
                     shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    border = BorderStroke(1.dp, NexoBorderSubtle)
                 ) {
                     Row(
                         modifier = Modifier
@@ -274,10 +473,20 @@ fun CustomerMenuScreen(
                             modifier = Modifier
                                 .size(54.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(NexoIndigoPrimary.copy(alpha = 0.2f)),
+                                .background(brandAccentColor.copy(alpha = 0.15f)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.RestaurantMenu, contentDescription = null, tint = NexoIndigoLight, modifier = Modifier.size(24.dp))
+                            Icon(
+                                if (prod.categoryId.contains("drink") || prod.categoryId.contains("coffee") || prod.categoryId.contains("v60"))
+                                    Icons.Default.LocalCafe
+                                else if (prod.categoryId.contains("dessert") || prod.categoryId.contains("pastry"))
+                                    Icons.Default.Cake
+                                else
+                                    Icons.Default.RestaurantMenu,
+                                contentDescription = null,
+                                tint = brandAccentColor,
+                                modifier = Modifier.size(24.dp)
+                            )
                         }
 
                         Spacer(modifier = Modifier.width(12.dp))
@@ -296,7 +505,7 @@ fun CustomerMenuScreen(
                                         color = NexoAmber.copy(alpha = 0.2f)
                                     ) {
                                         Text(
-                                            "ÖNERİLEN",
+                                            "POPÜLER",
                                             color = NexoAmber,
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold,
@@ -305,122 +514,75 @@ fun CustomerMenuScreen(
                                     }
                                 }
                             }
+
+                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = prod.description,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = NexoDarkTextSecondary,
-                                maxLines = 2
+                                color = NexoTextSecondary,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            if (prod.allergens.isNotEmpty()) {
-                                Text(
-                                    text = "Alerjen: " + prod.allergens.joinToString(", "),
-                                    fontSize = 10.sp,
-                                    color = NexoRose.copy(alpha = 0.9f)
-                                )
-                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "%.0f %s".format(prod.price, currentBiz.currency),
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 14.sp,
+                                color = brandAccentColor
+                            )
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                text = "%.2f %s".format(prod.price, business.currency),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = NexoIndigoLight
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            FilledIconButton(
-                                onClick = { showProductModal = prod },
-                                modifier = Modifier.size(32.dp),
-                                colors = IconButtonDefaults.filledIconButtonColors(containerColor = NexoIndigoPrimary)
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = "Ekle", tint = Color.White, modifier = Modifier.size(16.dp))
-                            }
+                        Button(
+                            onClick = { showProductModal = prod },
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = brandAccentColor),
+                            modifier = Modifier.testTag("add_product_${prod.id}")
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Ekle", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
 
-            item { Spacer(modifier = Modifier.height(80.dp)) }
+            item { Spacer(modifier = Modifier.height(60.dp)) }
         }
     }
 
-    // Product Customization Modal (Variants & Modifiers)
-    showProductModal?.let { prod ->
+    // Product Customization Modal
+    if (showProductModal != null) {
+        val prod = showProductModal!!
+        var quantity by remember { mutableIntStateOf(1) }
         var selectedVariant by remember { mutableStateOf(prod.variants.firstOrNull()?.id) }
         val selectedOptions = remember { mutableStateListOf<String>() }
-        var quantity by remember { mutableIntStateOf(1) }
 
         val currentUnitPrice = remember(selectedVariant, selectedOptions.toList()) {
-            val varDiff = prod.variants.firstOrNull { it.id == selectedVariant }?.priceDiff ?: 0.0
-            val optDiff = prod.options.filter { selectedOptions.contains(it.id) }.sumOf { it.priceDiff }
-            prod.price + varDiff + optDiff
+            val variantExtra = prod.variants.firstOrNull { it.id == selectedVariant }?.priceDiff ?: 0.0
+            val optionsExtra = prod.options.filter { selectedOptions.contains(it.id) }.sumOf { it.priceDiff }
+            prod.price + variantExtra + optionsExtra
         }
 
         AlertDialog(
             onDismissRequest = { showProductModal = null },
-            modifier = Modifier.fillMaxWidth().padding(8.dp)
-        ) {
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surface
-            ) {
-                Column(modifier = Modifier.padding(18.dp)) {
-                    Text(prod.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text(prod.description, fontSize = 12.sp, color = NexoDarkTextSecondary)
-
+            confirmButton = {},
+            title = null,
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(prod.name, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                        IconButton(onClick = { showProductModal = null }, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Kapat")
+                        }
+                    }
+                    Text(prod.description, fontSize = 12.sp, color = NexoTextSecondary)
                     Spacer(modifier = Modifier.height(14.dp))
-
-                    // Variants
-                    if (prod.variants.isNotEmpty()) {
-                        Text("Porsiyon / Boyut Seçin:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            prod.variants.forEach { v ->
-                                val isVSelected = selectedVariant == v.id
-                                FilterChip(
-                                    selected = isVSelected,
-                                    onClick = { selectedVariant = v.id },
-                                    label = {
-                                        Text(
-                                            text = if (v.priceDiff > 0) "${v.name} (+${v.priceDiff.toInt()}₺)" else v.name,
-                                            fontSize = 12.sp
-                                        )
-                                    }
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(10.dp))
-                    }
-
-                    // Options / Modifiers
-                    if (prod.options.isNotEmpty()) {
-                        Text("Ekstra / Tercih:", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            prod.options.forEach { opt ->
-                                val isChecked = selectedOptions.contains(opt.id)
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            if (isChecked) selectedOptions.remove(opt.id) else selectedOptions.add(opt.id)
-                                        },
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Checkbox(
-                                        checked = isChecked,
-                                        onCheckedChange = { checked ->
-                                            if (checked) selectedOptions.add(opt.id) else selectedOptions.remove(opt.id)
-                                        }
-                                    )
-                                    Text("${opt.name} (+${opt.priceDiff.toInt()}₺)", fontSize = 12.sp)
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(10.dp))
-                    }
 
                     // Quantity selector
                     Row(
@@ -464,15 +626,15 @@ fun CustomerMenuScreen(
                             cartItems.add(newItem)
                             showProductModal = null
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = NexoIndigoPrimary),
+                        colors = ButtonDefaults.buttonColors(containerColor = brandAccentColor),
                         modifier = Modifier.fillMaxWidth().height(46.dp),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Sepete Ekle (%.2f %s)".format(currentUnitPrice * quantity, business.currency), fontWeight = FontWeight.Bold)
+                        Text("Sepete Ekle (%.0f %s)".format(currentUnitPrice * quantity, currentBiz.currency), fontWeight = FontWeight.Bold)
                     }
                 }
             }
-        }
+        )
     }
 
     // Checkout Bottom Sheet
@@ -484,13 +646,18 @@ fun CustomerMenuScreen(
                     .padding(20.dp)
             ) {
                 Text(
-                    text = "Masa $selectedTableNum Siparişiniz",
+                    text = "Masa $selectedTableNum Sipariş Özeti",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
+                Text(
+                    text = "Restoran: ${currentBiz.name}",
+                    fontSize = 12.sp,
+                    color = NexoTextSecondary
+                )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                LazyColumn(modifier = Modifier.heightIn(max = 240.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LazyColumn(modifier = Modifier.heightIn(max = 200.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(cartItems) { item ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -498,14 +665,10 @@ fun CustomerMenuScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("${item.quantity}x ${item.product.name}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                val variantName = item.product.variants.firstOrNull { it.id == item.selectedVariantId }?.name
-                                if (variantName != null) {
-                                    Text("Boyut: $variantName", fontSize = 11.sp, color = NexoDarkTextSecondary)
-                                }
+                                Text("${item.quantity} × ${item.product.name}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             }
-                            Text("%.2f %s".format(item.totalPrice, business.currency), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            IconButton(onClick = { cartItems.remove(item) }, modifier = Modifier.size(32.dp)) {
+                            Text("%.0f %s".format(item.totalPrice, currentBiz.currency), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            IconButton(onClick = { cartItems.remove(item) }, modifier = Modifier.size(28.dp)) {
                                 Icon(Icons.Default.Close, contentDescription = "Kaldır", tint = NexoRose, modifier = Modifier.size(16.dp))
                             }
                         }
@@ -526,7 +689,7 @@ fun CustomerMenuScreen(
                 OutlinedTextField(
                     value = customerPhoneInput,
                     onValueChange = { customerPhoneInput = it },
-                    label = { Text("Telefon (Sadakat puanı biriktirmek için)") },
+                    label = { Text("Telefon (Sadakat puanı için)") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
@@ -534,12 +697,12 @@ fun CustomerMenuScreen(
                 OutlinedTextField(
                     value = orderNotesInput,
                     onValueChange = { orderNotesInput = it },
-                    label = { Text("Mutfak Notu (Örn: Çikolata sosu ılık olsun)") },
+                    label = { Text("Mutfak Notu") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -548,16 +711,15 @@ fun CustomerMenuScreen(
                 ) {
                     Text("Ödenecek Toplam:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
-                        "%.2f %s".format(cartTotal, business.currency),
+                        "%.0f %s".format(cartTotal, currentBiz.currency),
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.ExtraBold,
-                        color = NexoIndigoLight
+                        color = brandAccentColor
                     )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                // Server-side calculation & order submission
                 Button(
                     onClick = {
                         val cartInputs = cartItems.map {
@@ -569,59 +731,343 @@ fun CustomerMenuScreen(
                             )
                         }
                         val result = NexoRepository.createCustomerOrder(
-                            businessId = business.id,
+                            businessId = currentBiz.id,
                             tableNumber = selectedTableNum,
                             cartItems = cartInputs,
-                            customerName = customerNameInput,
+                            customerName = customerNameInput.ifBlank { "Masa $selectedTableNum Misafiri" },
                             customerPhone = customerPhoneInput,
                             notes = orderNotesInput
                         )
                         result.onSuccess { newOrder ->
-                            lastPlacedOrder = newOrder
+                            lastPlacedOrderId = newOrder.id
                             cartItems.clear()
                             showCartSheet = false
-                            orderSuccessDialog = true
                         }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp)
                         .testTag("submit_order_button"),
-                    colors = ButtonDefaults.buttonColors(containerColor = NexoEmeraldDark),
+                    colors = ButtonDefaults.buttonColors(containerColor = brandAccentColor),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(Icons.Default.CheckCircle, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Siparişi Onayla & Mutfağa İlet", fontWeight = FontWeight.Bold)
+                    Text("SİPARİŞ VER", fontWeight = FontWeight.Bold)
                 }
             }
         }
     }
 
-    // Success Confirmation Dialog
-    if (orderSuccessDialog) {
+    // Tenant Switcher Dialog (Testing different restaurants)
+    if (showTenantSwitcherDialog) {
         AlertDialog(
-            onDismissRequest = { orderSuccessDialog = false },
-            confirmButton = {
-                Button(
-                    onClick = { orderSuccessDialog = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = NexoIndigoPrimary)
-                ) {
-                    Text("Harika!")
-                }
-            },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Celebration, contentDescription = null, tint = NexoEmerald)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Siparişiniz Alındı!")
-                }
-            },
+            onDismissRequest = { showTenantSwitcherDialog = false },
+            confirmButton = {},
+            title = { Text("Restoran Web Sitesi Seçin", fontWeight = FontWeight.Bold) },
             text = {
-                Text(
-                    "Siparişiniz (#${lastPlacedOrder?.orderNumber}) anında işletme mutfağına ve servis ekranına iletildi. Barista ve mutfak ekibimiz hazırlığa başladı!"
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    allBusinesses.forEach { b ->
+                        val isSelected = b.id == currentBiz.id
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    activeWebsiteBusinessId = b.id
+                                    NexoRepository.switchBusiness(b.id)
+                                    showTenantSwitcherDialog = false
+                                },
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSelected) brandAccentColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                            border = if (isSelected) BorderStroke(1.5.dp, brandAccentColor) else null
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    b.name,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(b.websiteDomain, fontSize = 11.sp, color = NexoTextSecondary)
+                            }
+                        }
+                    }
+                }
             }
         )
+    }
+
+    // Table Picker Dialog (Testing Table 12 or others)
+    if (showTablePickerDialog) {
+        AlertDialog(
+            onDismissRequest = { showTablePickerDialog = false },
+            confirmButton = {},
+            title = { Text("Masa QR Kodu Seçin", fontWeight = FontWeight.Bold) },
+            text = {
+                LazyColumn(modifier = Modifier.heightIn(max = 280.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val tablesList = listOf(12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20)
+                    items(tablesList) { num ->
+                        val isSel = num == selectedTableNum
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSel) NexoIndigoPrimary.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                            border = if (isSel) BorderStroke(1.dp, NexoIndigoLight) else null,
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                selectedTableNum = num
+                                showTablePickerDialog = false
+                            }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Masa $num", fontWeight = FontWeight.Bold)
+                                if (num == 12) {
+                                    Text("Örnek Masa", fontSize = 11.sp, color = NexoEmeraldLight, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        )
+    }
+}
+
+// ========================================================
+// REAL-TIME ORDER STATUS TRACKER COMPOSABLE
+// ========================================================
+@Composable
+fun RealTimeOrderTrackerCard(
+    order: Order,
+    currency: String,
+    onDismiss: () -> Unit
+) {
+    val statusColor by animateColorAsState(
+        targetValue = when (order.status) {
+            OrderStatus.PENDING -> NexoAmber
+            OrderStatus.ACCEPTED -> NexoIndigoLight
+            OrderStatus.PREPARING -> NexoPurple
+            OrderStatus.READY -> NexoEmeraldLight
+            OrderStatus.COMPLETED -> NexoEmerald
+            OrderStatus.CANCELLED -> NexoRose
+        },
+        label = "statusColor"
+    )
+
+    val statusTitle = when (order.status) {
+        OrderStatus.PENDING -> "Siparişiniz Restorana İletildi"
+        OrderStatus.ACCEPTED -> "Siparişiniz Onaylandı"
+        OrderStatus.PREPARING -> "Siparişiniz Hazırlanıyor"
+        OrderStatus.READY -> "Siparişiniz Hazır!"
+        OrderStatus.COMPLETED -> "Sipariş Tamamlandı"
+        OrderStatus.CANCELLED -> "Sipariş İptal Edildi"
+    }
+
+    val statusSubtitle = when (order.status) {
+        OrderStatus.PENDING -> "Restoran sistemine anında düştü. Mutfak onayı bekleniyor..."
+        OrderStatus.ACCEPTED -> "Siparişiniz onaylandı. Barista ve şef hazırlığa başladı."
+        OrderStatus.PREPARING -> "Siparişiniz mutfakta özenle hazırlanıyor."
+        OrderStatus.READY -> "Siparişiniz hazır. Garson masanıza servis ediyor."
+        OrderStatus.COMPLETED -> "Sipariş masanıza teslim edildi. Afiyet olsun!"
+        OrderStatus.CANCELLED -> "Sipariş restoranca iptal edildi."
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("real_time_order_tracker_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.5.dp, statusColor)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Header: Order ID & Real-time Indicator
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(statusColor)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "ORDER #${order.orderNumber}",
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 15.sp
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = statusColor.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = when (order.status) {
+                            OrderStatus.PENDING -> "NEW"
+                            OrderStatus.ACCEPTED -> "CONFIRMED"
+                            OrderStatus.PREPARING -> "PREPARING"
+                            OrderStatus.READY -> "READY"
+                            OrderStatus.COMPLETED -> "COMPLETED"
+                            OrderStatus.CANCELLED -> "CANCELLED"
+                        },
+                        color = statusColor,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Prominent Status Message Banner
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = statusColor.copy(alpha = 0.1f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = when (order.status) {
+                            OrderStatus.PENDING -> Icons.Default.Schedule
+                            OrderStatus.ACCEPTED -> Icons.Default.ThumbUp
+                            OrderStatus.PREPARING -> Icons.Default.SoupKitchen
+                            OrderStatus.READY -> Icons.Default.RoomService
+                            OrderStatus.COMPLETED -> Icons.Default.Celebration
+                            OrderStatus.CANCELLED -> Icons.Default.Close
+                        },
+                        contentDescription = null,
+                        tint = statusColor,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = statusTitle,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = statusColor
+                        )
+                        Text(
+                            text = statusSubtitle,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 5-Stage Stepper Bar
+            val currentStep = when (order.status) {
+                OrderStatus.PENDING -> 1
+                OrderStatus.ACCEPTED -> 2
+                OrderStatus.PREPARING -> 3
+                OrderStatus.READY -> 4
+                OrderStatus.COMPLETED -> 5
+                OrderStatus.CANCELLED -> 0
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val stepNames = listOf("İletildi", "Onaylandı", "Hazırlanıyor", "Hazır", "Tamamlandı")
+                stepNames.forEachIndexed { index, name ->
+                    val stepNum = index + 1
+                    val isDone = currentStep >= stepNum
+                    val isCurrent = currentStep == stepNum
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isDone) statusColor else NexoBorderSubtle
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isDone) {
+                                Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                            } else {
+                                Text("$stepNum", fontSize = 10.sp, color = NexoTextSecondary, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = name,
+                            fontSize = 9.sp,
+                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isCurrent) statusColor else NexoTextSecondary
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider(color = NexoBorderSubtle)
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Order items summary
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                order.items.forEach { item ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("${item.quantity} × ${item.productName}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("%.0f %s".format(item.total, currency), fontSize = 12.sp, color = NexoTextSecondary)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Toplam Tutar:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text("%.0f %s".format(order.total, currency), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = statusColor)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "⚡ Sayfa yenilemeye gerek yoktur (Canlı Dinleyici Aktif)",
+                    fontSize = 10.sp,
+                    color = NexoTextSecondary
+                )
+                TextButton(
+                    onClick = onDismiss,
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text("Kapat", fontSize = 11.sp)
+                }
+            }
+        }
     }
 }

@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.NexoModule
@@ -38,12 +39,19 @@ fun DashboardScreen(
     onOpenCustomerView: () -> Unit
 ) {
     val business = NexoRepository.getActiveBusiness()
-    val orders by NexoRepository.orders.collectAsState()
-    val sales by NexoRepository.sales.collectAsState()
-    val customers by NexoRepository.customers.collectAsState()
-    val stockItems by NexoRepository.stockItems.collectAsState()
-    val appointments by NexoRepository.appointments.collectAsState()
-    val quotes by NexoRepository.quotes.collectAsState()
+    val allOrders by NexoRepository.orders.collectAsState()
+    val allSales by NexoRepository.sales.collectAsState()
+    val allCustomers by NexoRepository.customers.collectAsState()
+    val allStockItems by NexoRepository.stockItems.collectAsState()
+    val allAppointments by NexoRepository.appointments.collectAsState()
+    val allQuotes by NexoRepository.quotes.collectAsState()
+
+    val orders = allOrders.filter { it.businessId == business.id }
+    val sales = allSales.filter { it.businessId == business.id }
+    val customers = allCustomers.filter { it.businessId == business.id }
+    val stockItems = allStockItems.filter { it.businessId == business.id }
+    val appointments = allAppointments.filter { it.businessId == business.id }
+    val quotes = allQuotes.filter { it.businessId == business.id }
 
     val pendingOrders = orders.filter { it.status == OrderStatus.PENDING }
     val todayRevenue = orders.sumOf { it.total } + sales.sumOf { it.totalAmount }
@@ -251,8 +259,8 @@ fun DashboardScreen(
                                         currency = business.currency,
                                         totalOrders = orders.size,
                                         todayRevenue = todayRevenue,
-                                        dineInOrders = orders.count { it.tableNumber > 0 },
-                                        takeawayOrders = orders.count { it.tableNumber <= 0 },
+                                        dineInOrders = orders.count { (it.tableNumber ?: 0) > 0 },
+                                        takeawayOrders = orders.count { (it.tableNumber ?: 0) <= 0 },
                                         lowStockCount = lowStockCount,
                                         lowStockItems = stockItems.filter { it.isLowStock }.map { it.name },
                                         totalCustomers = customers.size,

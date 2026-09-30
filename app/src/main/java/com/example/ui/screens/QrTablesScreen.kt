@@ -5,8 +5,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Print
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,8 +24,9 @@ import com.example.ui.theme.*
 fun QrTablesScreen(
     onPreviewCustomerMenu: (Int) -> Unit
 ) {
-    val tables by NexoRepository.tables.collectAsState()
+    val allTables by NexoRepository.tables.collectAsState()
     val business = NexoRepository.getActiveBusiness()
+    val tables = allTables.filter { it.businessId == business.id }
 
     var showAddTableDialog by remember { mutableStateOf(false) }
     var showPrintSheetDialog by remember { mutableStateOf(false) }
@@ -75,7 +75,7 @@ fun QrTablesScreen(
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                         modifier = Modifier.testTag("open_qr_scanner_btn")
                     ) {
-                        Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.QrCode2, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Kamera Tara", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }

@@ -5,12 +5,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -28,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import com.example.data.model.NexoModule
+import com.example.data.model.NexoPushNotification
 import com.example.data.model.UserRole
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.NexoRepository
@@ -54,6 +57,12 @@ enum class AppDestination(val titleTr: String, val icon: ImageVector) {
     SETTINGS("Ayarlar", Icons.Default.Settings)
 }
 
+enum class SystemEnvironment(val title: String, val subtitle: String, val icon: ImageVector) {
+    RESTAURANT_APP("NEXO BUSINESS", "Restoran Paneli & Mobil App", Icons.Default.Storefront),
+    CUSTOMER_WEBSITE("MÜŞTERİ SİTESİ", "casa-cafe.nexo.business", Icons.Default.Language),
+    SUPER_ADMIN("SUPER ADMIN", "NEXO SaaS Platformu", Icons.Default.AdminPanelSettings)
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,6 +82,7 @@ fun NexoAppRoot() {
     val authRepository = remember { AuthRepository(context) }
     val activeBusiness = NexoRepository.getActiveBusiness()
     val activeRole by NexoRepository.currentStaffRole.collectAsState()
+    val latestNotification by NexoRepository.latestPushNotification.collectAsState()
 
     LaunchedEffect(Unit) {
         authRepository.silentAutoLogin()
@@ -82,22 +92,30 @@ fun NexoAppRoot() {
         authRepository.cacheRestaurantTables(activeBusiness.id, NexoRepository.tables.value)
     }
 
+    var currentEnvironment by remember { mutableStateOf(SystemEnvironment.RESTAURANT_APP) }
+    var customerTableNumber by remember { mutableIntStateOf(12) }
+
     var showLandingPage by remember { mutableStateOf(false) }
     var showLoginScreen by remember { mutableStateOf(false) }
-    var showCustomerView by remember { mutableStateOf(false) }
-    var customerTableNumber by remember { mutableIntStateOf(3) }
-    var showSuperAdmin by remember { mutableStateOf(false) }
     var showOnboardingWizard by remember { mutableStateOf(false) }
 
     var currentDestination by remember { mutableStateOf(AppDestination.DASHBOARD) }
 
-    // Back handling
-    if (showCustomerView) {
-        BackHandler { showCustomerView = false }
+    // ========================================================
+    // ENVIRONMENT SEPARATION ROUTING
+    // ========================================================
+    if (currentEnvironment == SystemEnvironment.CUSTOMER_WEBSITE) {
+        BackHandler { currentEnvironment = SystemEnvironment.RESTAURANT_APP }
         CustomerMenuScreen(
             initialTableNumber = customerTableNumber,
-            onBackToDashboard = { showCustomerView = false }
+            onBackToDashboard = { currentEnvironment = SystemEnvironment.RESTAURANT_APP }
         )
+        return
+    }
+
+    if (currentEnvironment == SystemEnvironment.SUPER_ADMIN) {
+        BackHandler { currentEnvironment = SystemEnvironment.RESTAURANT_APP }
+        SuperAdminScreen(onBack = { currentEnvironment = SystemEnvironment.RESTAURANT_APP })
         return
     }
 
@@ -114,12 +132,6 @@ fun NexoAppRoot() {
                 currentDestination = AppDestination.DASHBOARD
             }
         )
-        return
-    }
-
-    if (showSuperAdmin) {
-        BackHandler { showSuperAdmin = false }
-        SuperAdminScreen(onBack = { showSuperAdmin = false })
         return
     }
 
@@ -249,13 +261,13 @@ fun NexoAppRoot() {
                     ) {
                         Icon(Icons.Default.AccountCircle, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Hesap / Giriş", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Giriş / Hesap", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
 
                     IconButton(
                         onClick = {
                             coroutineScope.launch { drawerState.close() }
-                            showSuperAdmin = true
+                            currentEnvironment = SystemEnvironment.SUPER_ADMIN
                         }
                     ) {
                         Icon(Icons.Default.AdminPanelSettings, contentDescription = "Yönetim", tint = NexoTextSecondary)
@@ -266,20 +278,73 @@ fun NexoAppRoot() {
     ) {
         Scaffold(
             topBar = {
-                NexoTopBar(
-                    title = activeBusiness.name,
-                    subtitle = "${activeBusiness.businessType.titleTr} • ${activeBusiness.branches.firstOrNull()?.name ?: "Merkez"}",
-                    activeRole = activeRole,
-                    onRoleChange = { NexoRepository.setStaffRole(it) },
-                    onOpenCustomerView = {
-                        customerTableNumber = 3
-                        showCustomerView = true
-                    },
-                    onOpenAdmin = { showSuperAdmin = true },
-                    onResetDemo = { NexoRepository.resetToDemoData() },
-                    onOpenLogin = { showLoginScreen = true },
-                    onOpenDrawer = { coroutineScope.launch { drawerState.open() } }
-                )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // System Environment Mode Selector Pill Bar
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            SystemEnvironment.entries.forEach { env ->
+                                val isSelected = currentEnvironment == env
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            if (env == SystemEnvironment.CUSTOMER_WEBSITE) {
+                                                customerTableNumber = 12
+                                            }
+                                            currentEnvironment = env
+                                        }
+                                        .testTag("env_tab_${env.name.lowercase()}")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(vertical = 6.dp),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            env.icon,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(13.dp),
+                                            tint = if (isSelected) Color.White else NexoTextSecondary
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = env.title,
+                                            fontSize = 9.5.sp,
+                                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                                            color = if (isSelected) Color.White else NexoTextSecondary,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    NexoTopBar(
+                        title = activeBusiness.name,
+                        subtitle = "${activeBusiness.businessType.titleTr} • ${activeBusiness.branches.firstOrNull()?.name ?: "Merkez"}",
+                        activeRole = activeRole,
+                        onRoleChange = { NexoRepository.setStaffRole(it) },
+                        onOpenCustomerView = {
+                            customerTableNumber = 12
+                            currentEnvironment = SystemEnvironment.CUSTOMER_WEBSITE
+                        },
+                        onOpenAdmin = { currentEnvironment = SystemEnvironment.SUPER_ADMIN },
+                        onResetDemo = { NexoRepository.resetToDemoData() },
+                        onOpenLogin = { showLoginScreen = true },
+                        onOpenDrawer = { coroutineScope.launch { drawerState.open() } }
+                    )
+                }
             }
         ) { innerPadding ->
             Box(
@@ -287,6 +352,7 @@ fun NexoAppRoot() {
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
+                // Active Screen in NEXO BUSINESS
                 when (currentDestination) {
                     AppDestination.DASHBOARD -> DashboardScreen(
                         onNavigateToModule = { mod ->
@@ -307,8 +373,8 @@ fun NexoAppRoot() {
                             }
                         },
                         onOpenCustomerView = {
-                            customerTableNumber = 3
-                            showCustomerView = true
+                            customerTableNumber = 12
+                            currentEnvironment = SystemEnvironment.CUSTOMER_WEBSITE
                         }
                     )
                     AppDestination.MENU -> MenuManagementScreen()
@@ -316,7 +382,7 @@ fun NexoAppRoot() {
                     AppDestination.TABLES -> QrTablesScreen(
                         onPreviewCustomerMenu = { tblNum ->
                             customerTableNumber = tblNum
-                            showCustomerView = true
+                            currentEnvironment = SystemEnvironment.CUSTOMER_WEBSITE
                         }
                     )
                     AppDestination.ORDERS -> OrdersAndKdsScreen()
@@ -331,6 +397,100 @@ fun NexoAppRoot() {
                     AppDestination.ANALYTICS -> AnalyticsScreen()
                     AppDestination.STAFF -> StaffScreen()
                     AppDestination.SETTINGS -> SettingsAndPlansScreen()
+                }
+
+                // ========================================================
+                // NEW ORDER PUSH NOTIFICATION FLOATING BANNER
+                // ========================================================
+                if (latestNotification != null) {
+                    val notif = latestNotification!!
+                    Card(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(12.dp)
+                            .fillMaxWidth()
+                            .testTag("new_order_push_notification_banner"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = NexoDarkSurface),
+                        border = BorderStroke(2.dp, NexoAmber),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 10.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(shape = CircleShape, color = NexoAmber.copy(alpha = 0.2f)) {
+                                        Icon(
+                                            Icons.Default.NotificationsActive,
+                                            contentDescription = null,
+                                            tint = NexoAmber,
+                                            modifier = Modifier.padding(6.dp).size(20.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text("🔔 NEW ORDER", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = NexoAmber)
+                                        Text(notif.tableInfo, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = { NexoRepository.dismissPushNotification() },
+                                    modifier = Modifier.size(26.dp)
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Kapat", tint = NexoDarkTextSecondary, modifier = Modifier.size(16.dp))
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = notif.itemsSummary,
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.95f),
+                                fontWeight = FontWeight.SemiBold
+                            )
+
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Total: ${notif.totalAmountFormatted}",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = NexoEmeraldLight
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        currentDestination = AppDestination.ORDERS
+                                        NexoRepository.dismissPushNotification()
+                                    },
+                                    modifier = Modifier.weight(1f).height(38.dp).testTag("view_order_notification_btn"),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                                ) {
+                                    Text("VIEW ORDER", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Button(
+                                    onClick = {
+                                        NexoRepository.acceptLatestNotificationOrder()
+                                    },
+                                    modifier = Modifier.weight(1f).height(38.dp).testTag("accept_order_notification_btn"),
+                                    colors = ButtonDefaults.buttonColors(containerColor = NexoEmeraldDark)
+                                ) {
+                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("ACCEPT", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

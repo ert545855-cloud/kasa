@@ -40,9 +40,10 @@ fun MenuManagementScreen() {
     var showAddProductDialog by remember { mutableStateOf(false) }
     var editingProduct by remember { mutableStateOf<Product?>(null) }
 
-    val activeCategory = selectedCategoryId ?: categories.firstOrNull()?.id
+    val activeCategories = categories.filter { it.businessId == business.id }
+    val activeCategory = selectedCategoryId ?: activeCategories.firstOrNull()?.id
     val filteredProducts = products.filter {
-        activeCategory == null || it.categoryId == activeCategory
+        it.businessId == business.id && (activeCategory == null || it.categoryId == activeCategory)
     }
 
     Scaffold(
@@ -76,7 +77,7 @@ fun MenuManagementScreen() {
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "${products.size} ürün, ${categories.size} kategori",
+                        text = "${filteredProducts.size} ürün, ${activeCategories.size} kategori",
                         style = MaterialTheme.typography.bodySmall,
                         color = NexoDarkTextSecondary
                     )
@@ -100,7 +101,7 @@ fun MenuManagementScreen() {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                items(categories) { cat ->
+                items(activeCategories) { cat ->
                     val isSelected = cat.id == activeCategory
                     FilterChip(
                         selected = isSelected,
