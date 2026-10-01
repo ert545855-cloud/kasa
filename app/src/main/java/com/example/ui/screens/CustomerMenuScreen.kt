@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,8 +22,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
+import com.example.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -88,15 +92,23 @@ fun CustomerMenuScreen(
     var lastPlacedOrderId by remember { mutableStateOf<String?>(null) }
     var showTenantSwitcherDialog by remember { mutableStateOf(false) }
     var showTablePickerDialog by remember { mutableStateOf(false) }
+    var showOrderHistorySheet by remember { mutableStateOf(false) }
 
     // Real-time order tracker subscription (Zero page refresh needed!)
     val liveActiveOrder = tenantOrders.firstOrNull { it.id == lastPlacedOrderId }
 
     val activeCategory = selectedCategoryId ?: tenantCategories.firstOrNull()?.id
 
-    val filteredProducts = tenantProducts.filter {
-        (activeCategory == null || it.categoryId == activeCategory) &&
-        (searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true) || it.description.contains(searchQuery, ignoreCase = true))
+    val filteredProducts = tenantProducts.filter { prod ->
+        val matchesQuery = searchQuery.isBlank() ||
+                prod.name.contains(searchQuery, ignoreCase = true) ||
+                prod.description.contains(searchQuery, ignoreCase = true)
+        val matchesCategory = if (searchQuery.isNotBlank() && selectedCategoryId == null) {
+            true
+        } else {
+            activeCategory == null || prod.categoryId == activeCategory
+        }
+        matchesQuery && matchesCategory
     }
 
     val cartTotal = cartItems.sumOf { it.totalPrice }
@@ -110,7 +122,12 @@ fun CustomerMenuScreen(
 
     Scaffold(
         topBar = {
-            Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .statusBarsPadding()
+            ) {
                 // Public Browser Address Simulation Bar (casa-cafe.nexo.business)
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant,
@@ -246,35 +263,96 @@ fun CustomerMenuScreen(
                             }
                         }
 
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = brandAccentColor.copy(alpha = 0.15f)
-                        ) {
-                            Text(
-                                text = "Masa $selectedTableNum",
-                                color = brandAccentColor,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = brandAccentColor.copy(alpha = 0.12f),
+                                modifier = Modifier
+                                    .clickable { showOrderHistorySheet = true }
+                                    .testTag("customer_order_history_btn")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.History,
+                                        contentDescription = "Sipariş Geçmişim",
+                                        modifier = Modifier.size(14.dp),
+                                        tint = brandAccentColor
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Geçmişim (${tenantOrders.size})",
+                                        color = brandAccentColor,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = brandAccentColor.copy(alpha = 0.18f),
+                                modifier = Modifier.clickable { showTablePickerDialog = true }
+                            ) {
+                                Text(
+                                    text = "Masa $selectedTableNum",
+                                    color = brandAccentColor,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Search field
+                    // Real-Time Search Bar with Instant Result Feedback
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
                         placeholder = { Text("Menüde ara (Örn: Latte, Cheesecake, Burger)...", fontSize = 12.sp) },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        trailingIcon = {
+                            if (searchQuery.isNotBlank()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Aramayı Temizle", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(46.dp)
+                            .height(48.dp)
                             .testTag("customer_menu_search"),
                         singleLine = true,
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(12.dp)
                     )
+
+                    if (searchQuery.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "\"$searchQuery\" için ${filteredProducts.size} sonuç listeleniyor",
+                                fontSize = 11.sp,
+                                color = brandAccentColor,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Aramayı Sıfırla",
+                                fontSize = 11.sp,
+                                color = NexoTextSecondary,
+                                modifier = Modifier.clickable { searchQuery = "" }
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -426,6 +504,53 @@ fun CustomerMenuScreen(
                 }
             }
 
+            // Visual Hero Banner
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(130.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, brandAccentColor.copy(alpha = 0.25f))
+                ) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Image(
+                            painter = painterResource(id = R.drawable.img_hero_restaurant),
+                            contentDescription = "Restoran Görseli",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f))
+                                    )
+                                )
+                        )
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(14.dp)
+                        ) {
+                            Text(
+                                text = currentBiz.name,
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 18.sp
+                            )
+                            Text(
+                                text = "${currentBiz.tagline} • Masa $selectedTableNum Menüsü",
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+
             // Categories horizontal bar
             item {
                 LazyRow(
@@ -469,24 +594,42 @@ fun CustomerMenuScreen(
                             .padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(54.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(brandAccentColor.copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                if (prod.categoryId.contains("drink") || prod.categoryId.contains("coffee") || prod.categoryId.contains("v60"))
-                                    Icons.Default.LocalCafe
-                                else if (prod.categoryId.contains("dessert") || prod.categoryId.contains("pastry"))
-                                    Icons.Default.Cake
-                                else
-                                    Icons.Default.RestaurantMenu,
-                                contentDescription = null,
-                                tint = brandAccentColor,
-                                modifier = Modifier.size(24.dp)
+                        val productDrawableId = when {
+                            prod.name.contains("Latte", ignoreCase = true) || prod.id.contains("latte") -> R.drawable.img_latte
+                            prod.name.contains("Cheesecake", ignoreCase = true) || prod.id.contains("cheesecake") -> R.drawable.img_cheesecake
+                            prod.name.contains("Burger", ignoreCase = true) || prod.name.contains("Sandviç", ignoreCase = true) -> R.drawable.img_burger
+                            else -> null
+                        }
+
+                        if (productDrawableId != null) {
+                            Image(
+                                painter = painterResource(id = productDrawableId),
+                                contentDescription = prod.name,
+                                modifier = Modifier
+                                    .size(60.dp)
+                                    .clip(RoundedCornerShape(12.dp)),
+                                contentScale = ContentScale.Crop
                             )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(60.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(brandAccentColor.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    if (prod.categoryId.contains("drink") || prod.categoryId.contains("coffee") || prod.categoryId.contains("v60"))
+                                        Icons.Default.LocalCafe
+                                    else if (prod.categoryId.contains("dessert") || prod.categoryId.contains("pastry"))
+                                        Icons.Default.Cake
+                                    else
+                                        Icons.Default.RestaurantMenu,
+                                    contentDescription = null,
+                                    tint = brandAccentColor,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
                         }
 
                         Spacer(modifier = Modifier.width(12.dp))
@@ -639,121 +782,380 @@ fun CustomerMenuScreen(
 
     // Checkout Bottom Sheet
     if (showCartSheet) {
-        ModalBottomSheet(onDismissRequest = { showCartSheet = false }) {
+        ModalBottomSheet(
+            onDismissRequest = { showCartSheet = false },
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp)
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
-                Text(
-                    text = "Masa $selectedTableNum Sipariş Özeti",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Restoran: ${currentBiz.name}",
-                    fontSize = 12.sp,
-                    color = NexoTextSecondary
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-
-                LazyColumn(modifier = Modifier.heightIn(max = 200.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(cartItems) { item ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("${item.quantity} × ${item.product.name}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            }
-                            Text("%.0f %s".format(item.totalPrice, currentBiz.currency), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            IconButton(onClick = { cartItems.remove(item) }, modifier = Modifier.size(28.dp)) {
-                                Icon(Icons.Default.Close, contentDescription = "Kaldır", tint = NexoRose, modifier = Modifier.size(16.dp))
-                            }
-                        }
-                    }
-                }
-
-                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
-
-                // Guest Info Inputs
-                OutlinedTextField(
-                    value = customerNameInput,
-                    onValueChange = { customerNameInput = it },
-                    label = { Text("Adınız (İsteğe bağlı)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = customerPhoneInput,
-                    onValueChange = { customerPhoneInput = it },
-                    label = { Text("Telefon (Sadakat puanı için)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = orderNotesInput,
-                    onValueChange = { orderNotesInput = it },
-                    label = { Text("Mutfak Notu") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Ödenecek Toplam:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(
-                        "%.0f %s".format(cartTotal, currentBiz.currency),
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = brandAccentColor
-                    )
+                    Column {
+                        Text(
+                            text = "Masa $selectedTableNum Sipariş Özeti",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Text(
+                            text = "${currentBiz.name} • ${cartItems.sumOf { it.quantity }} Ürün",
+                            fontSize = 12.sp,
+                            color = NexoTextSecondary
+                        )
+                    }
+                    IconButton(onClick = { showCartSheet = false }) {
+                        Icon(Icons.Default.Close, contentDescription = "Kapat")
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                Button(
-                    onClick = {
-                        val cartInputs = cartItems.map {
-                            CartItemInput(
-                                productId = it.product.id,
-                                variantId = it.selectedVariantId,
-                                selectedOptionIds = it.selectedOptionIds,
-                                quantity = it.quantity
+                if (cartItems.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.RemoveShoppingCart, contentDescription = null, tint = NexoTextMuted, modifier = Modifier.size(44.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("Sepetiniz boş", fontWeight = FontWeight.Bold, color = NexoTextSecondary)
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 240.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(cartItems) { item ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            item.product.name,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        )
+                                        Text(
+                                            "Birim: %.0f %s".format(item.unitPrice, currentBiz.currency),
+                                            fontSize = 11.sp,
+                                            color = NexoTextSecondary
+                                        )
+                                    }
+
+                                    // Quantity +/- Controls
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 8.dp)
+                                    ) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = MaterialTheme.colorScheme.surface,
+                                            modifier = Modifier
+                                                .size(28.dp)
+                                                .clickable {
+                                                    if (item.quantity > 1) {
+                                                        item.quantity--
+                                                    } else {
+                                                        cartItems.remove(item)
+                                                    }
+                                                }
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(Icons.Default.Remove, contentDescription = "Azalt", modifier = Modifier.size(14.dp))
+                                            }
+                                        }
+
+                                        Text(
+                                            text = "${item.quantity}",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            modifier = Modifier.padding(horizontal = 10.dp)
+                                        )
+
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = brandAccentColor.copy(alpha = 0.15f),
+                                            modifier = Modifier
+                                                .size(28.dp)
+                                                .clickable { item.quantity++ }
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(Icons.Default.Add, contentDescription = "Artır", tint = brandAccentColor, modifier = Modifier.size(14.dp))
+                                            }
+                                        }
+                                    }
+
+                                    Text(
+                                        "%.0f %s".format(item.totalPrice, currentBiz.currency),
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 13.sp,
+                                        color = brandAccentColor
+                                    )
+
+                                    IconButton(
+                                        onClick = { cartItems.remove(item) },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = "Sil", tint = NexoRose, modifier = Modifier.size(14.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                    // Guest Info Inputs
+                    OutlinedTextField(
+                        value = customerNameInput,
+                        onValueChange = { customerNameInput = it },
+                        label = { Text("Adınız (İsteğe bağlı)", fontSize = 12.sp) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = customerPhoneInput,
+                        onValueChange = { customerPhoneInput = it },
+                        label = { Text("Telefon (Sadakat puanı için)", fontSize = 12.sp) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = orderNotesInput,
+                        onValueChange = { orderNotesInput = it },
+                        label = { Text("Mutfak / Garson Notu (Az buzlu, ekstra sos vb.)", fontSize = 12.sp) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Toplam Ödenecek:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text("KDV Dahil", fontSize = 10.sp, color = NexoTextSecondary)
+                        }
+                        Text(
+                            "%.0f %s".format(cartTotal, currentBiz.currency),
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = brandAccentColor
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Button(
+                        onClick = {
+                            val cartInputs = cartItems.map {
+                                CartItemInput(
+                                    productId = it.product.id,
+                                    variantId = it.selectedVariantId,
+                                    selectedOptionIds = it.selectedOptionIds,
+                                    quantity = it.quantity
+                                )
+                            }
+                            val result = NexoRepository.createCustomerOrder(
+                                businessId = currentBiz.id,
+                                tableNumber = selectedTableNum,
+                                cartItems = cartInputs,
+                                customerName = customerNameInput.ifBlank { "Masa $selectedTableNum Misafiri" },
+                                customerPhone = customerPhoneInput,
+                                notes = orderNotesInput
+                            )
+                            result.onSuccess { newOrder ->
+                                lastPlacedOrderId = newOrder.id
+                                cartItems.clear()
+                                showCartSheet = false
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("submit_order_button"),
+                        colors = ButtonDefaults.buttonColors(containerColor = brandAccentColor),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "SİPARİŞİ ONAYLA VE GÖNDER (%.0f %s)".format(cartTotal, currentBiz.currency),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // Customer Order History Bottom Sheet
+    if (showOrderHistorySheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showOrderHistorySheet = false },
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.History,
+                            contentDescription = null,
+                            tint = brandAccentColor,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Sipariş Geçmişim",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                    IconButton(onClick = { showOrderHistorySheet = false }) {
+                        Icon(Icons.Default.Close, contentDescription = "Kapat")
+                    }
+                }
+
+                Text(
+                    text = "${currentBiz.name} — Masa $selectedTableNum ve geçmiş siparişleriniz",
+                    fontSize = 12.sp,
+                    color = NexoTextSecondary
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                if (tenantOrders.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 36.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.ReceiptLong,
+                                contentDescription = null,
+                                tint = NexoTextMuted,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                "Henüz verilmiş bir siparişiniz yok.",
+                                fontWeight = FontWeight.Bold,
+                                color = NexoTextPrimary
+                            )
+                            Text(
+                                "Menüden lezzetleri sepete ekleyip hemen sipariş verebilirsiniz.",
+                                fontSize = 12.sp,
+                                color = NexoTextSecondary
                             )
                         }
-                        val result = NexoRepository.createCustomerOrder(
-                            businessId = currentBiz.id,
-                            tableNumber = selectedTableNum,
-                            cartItems = cartInputs,
-                            customerName = customerNameInput.ifBlank { "Masa $selectedTableNum Misafiri" },
-                            customerPhone = customerPhoneInput,
-                            notes = orderNotesInput
-                        )
-                        result.onSuccess { newOrder ->
-                            lastPlacedOrderId = newOrder.id
-                            cartItems.clear()
-                            showCartSheet = false
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 420.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(tenantOrders.reversed()) { pastOrder ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Sipariş #${pastOrder.orderNumber}",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        )
+                                        StatusBadge(status = pastOrder.status)
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "Masa ${pastOrder.tableNumber} • ${pastOrder.customerName ?: "Misafir"}",
+                                        fontSize = 11.sp,
+                                        color = NexoTextSecondary
+                                    )
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    HorizontalDivider(color = NexoBorderSubtle)
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    pastOrder.items.forEach { orderItem ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                "${orderItem.quantity}x ${orderItem.productName}",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                            Text(
+                                                "%.0f %s".format(orderItem.total, currentBiz.currency),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("Toplam Tutar:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                        Text(
+                                            "%.0f %s".format(pastOrder.total, currentBiz.currency),
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 14.sp,
+                                            color = brandAccentColor
+                                        )
+                                    }
+                                }
+                            }
                         }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("submit_order_button"),
-                    colors = ButtonDefaults.buttonColors(containerColor = brandAccentColor),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("SİPARİŞ VER", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
@@ -886,6 +1288,19 @@ fun RealTimeOrderTrackerCard(
         border = BorderStroke(1.5.dp, statusColor)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
+            // Visual Order Status Banner
+            Image(
+                painter = painterResource(id = R.drawable.img_order_success),
+                contentDescription = "Sipariş Takibi",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(115.dp)
+                    .clip(RoundedCornerShape(12.dp)),
+                contentScale = ContentScale.Crop
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             // Header: Order ID & Real-time Indicator
             Row(
                 modifier = Modifier.fillMaxWidth(),

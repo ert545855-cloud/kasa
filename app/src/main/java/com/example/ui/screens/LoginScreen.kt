@@ -70,7 +70,7 @@ fun LoginScreen(
     var showForgotPasswordDialog by remember { mutableStateOf(false) }
     var resetEmailInput by remember { mutableStateOf("") }
 
-    LaunchedEffect(currentUser) {
+    LaunchedEffect(Unit) {
         if (currentUser != null && errorMessage == null) {
             onLoginSuccess()
         }
@@ -79,7 +79,9 @@ fun LoginScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(NexoWarmBeige),
+            .background(NexoWarmBeige)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
         contentAlignment = Alignment.Center
     ) {
         Card(
@@ -499,7 +501,19 @@ fun LoginScreen(
                                     }
                                     onLoginSuccess()
                                 }.onFailure { error ->
-                                    errorMessage = error.localizedMessage ?: "Google girişi tamamlanamadı."
+                                    val msg = error.message.orEmpty()
+                                    val isCancelled = error is androidx.credentials.exceptions.GetCredentialCancellationException ||
+                                            msg.contains("cancelled", ignoreCase = true) ||
+                                            msg.contains("canceled", ignoreCase = true) ||
+                                            msg.contains("activity is cancelled", ignoreCase = true) ||
+                                            msg.contains("16:", ignoreCase = true)
+
+                                    if (isCancelled) {
+                                        // User intentionally dismissed or cancelled Google Sign-In prompt
+                                        errorMessage = null
+                                    } else {
+                                        errorMessage = error.localizedMessage ?: "Google girişi tamamlanamadı."
+                                    }
                                 }
                             }
                         } else {

@@ -2,7 +2,6 @@ package com.example.data.local.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
-import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.util.UUID
@@ -31,14 +30,6 @@ data class BusinessEntity(
 
 @Entity(
     tableName = "branches",
-    foreignKeys = [
-        ForeignKey(
-            entity = BusinessEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["businessId"],
-            onDelete = ForeignKey.CASCADE
-        )
-    ],
     indices = [Index(value = ["businessId"])]
 )
 data class BranchEntity(
@@ -54,14 +45,6 @@ data class BranchEntity(
 
 @Entity(
     tableName = "members",
-    foreignKeys = [
-        ForeignKey(
-            entity = BusinessEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["businessId"],
-            onDelete = ForeignKey.CASCADE
-        )
-    ],
     indices = [Index(value = ["businessId"]), Index(value = ["userId"])]
 )
 data class MemberEntity(
@@ -81,14 +64,6 @@ data class MemberEntity(
 
 @Entity(
     tableName = "menu_categories",
-    foreignKeys = [
-        ForeignKey(
-            entity = BusinessEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["businessId"],
-            onDelete = ForeignKey.CASCADE
-        )
-    ],
     indices = [Index(value = ["businessId"])]
 )
 data class CategoryEntity(
@@ -104,14 +79,6 @@ data class CategoryEntity(
 
 @Entity(
     tableName = "menu_items",
-    foreignKeys = [
-        ForeignKey(
-            entity = BusinessEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["businessId"],
-            onDelete = ForeignKey.CASCADE
-        )
-    ],
     indices = [Index(value = ["businessId"]), Index(value = ["categoryId"])]
 )
 data class MenuItemEntity(
@@ -136,14 +103,6 @@ data class MenuItemEntity(
 
 @Entity(
     tableName = "restaurant_tables",
-    foreignKeys = [
-        ForeignKey(
-            entity = BusinessEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["businessId"],
-            onDelete = ForeignKey.CASCADE
-        )
-    ],
     indices = [Index(value = ["businessId"])]
 )
 data class RestaurantTableEntity(
@@ -160,14 +119,6 @@ data class RestaurantTableEntity(
 
 @Entity(
     tableName = "cached_orders",
-    foreignKeys = [
-        ForeignKey(
-            entity = BusinessEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["businessId"],
-            onDelete = ForeignKey.CASCADE
-        )
-    ],
     indices = [Index(value = ["businessId"])]
 )
 data class CachedOrderEntity(

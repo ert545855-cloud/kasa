@@ -34,6 +34,7 @@ import com.example.data.model.NexoPushNotification
 import com.example.data.model.UserRole
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.NexoRepository
+import com.example.data.repository.OrderRepository
 import com.example.ui.components.NexoTopBar
 import com.example.ui.screens.*
 import com.example.ui.theme.*
@@ -80,23 +81,42 @@ class MainActivity : ComponentActivity() {
 fun NexoAppRoot() {
     val context = LocalContext.current
     val authRepository = remember { AuthRepository(context) }
+    val orderRepository = remember { OrderRepository.getInstance(context) }
+    val currentUser by authRepository.currentUser.collectAsState()
     val activeBusiness = NexoRepository.getActiveBusiness()
     val activeRole by NexoRepository.currentStaffRole.collectAsState()
     val latestNotification by NexoRepository.latestPushNotification.collectAsState()
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(activeBusiness.id) {
         authRepository.silentAutoLogin()
-        // Local Room persistence for offline functionality
+        // Local Room persistence for offline functionality - cache business first
+        authRepository.cacheBusiness(activeBusiness)
         authRepository.cacheMenuCategories(activeBusiness.id, NexoRepository.categories.value)
         authRepository.cacheMenuItems(activeBusiness.id, NexoRepository.products.value)
         authRepository.cacheRestaurantTables(activeBusiness.id, NexoRepository.tables.value)
+
+        // Real-time Firestore <-> Room synchronization & reactive flows
+        NexoRepository.bindOrderRepository(orderRepository)
+        orderRepository.startRealtimeSync(activeBusiness.id, this)
+
+        launch {
+            orderRepository.newOrdersFlow.collect { orderEntity ->
+                NexoRepository.syncFromOrderEntity(orderEntity)
+            }
+        }
+        launch {
+            orderRepository.statusUpdatesFlow.collect { orderEntity ->
+                NexoRepository.syncFromOrderEntity(orderEntity)
+            }
+        }
     }
 
     var currentEnvironment by remember { mutableStateOf(SystemEnvironment.RESTAURANT_APP) }
     var customerTableNumber by remember { mutableIntStateOf(12) }
 
     var showLandingPage by remember { mutableStateOf(false) }
-    var showLoginScreen by remember { mutableStateOf(false) }
+    // Start with Login Screen if not authenticated (Firebase Auth flow)
+    var showLoginScreen by remember { mutableStateOf(currentUser == null) }
     var showOnboardingWizard by remember { mutableStateOf(false) }
 
     var currentDestination by remember { mutableStateOf(AppDestination.DASHBOARD) }
@@ -278,7 +298,11 @@ fun NexoAppRoot() {
     ) {
         Scaffold(
             topBar = {
-                Column(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                ) {
                     // System Environment Mode Selector Pill Bar
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -287,8 +311,8 @@ fun NexoAppRoot() {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             SystemEnvironment.entries.forEach { env ->
                                 val isSelected = currentEnvironment == env
@@ -306,21 +330,25 @@ fun NexoAppRoot() {
                                         .testTag("env_tab_${env.name.lowercase()}")
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(vertical = 6.dp),
+                                        modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
                                         horizontalArrangement = Arrangement.Center,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(
                                             env.icon,
                                             contentDescription = null,
-                                            modifier = Modifier.size(13.dp),
+                                            modifier = Modifier.size(14.dp),
                                             tint = if (isSelected) Color.White else NexoTextSecondary
                                         )
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(
-                                            text = env.title,
-                                            fontSize = 9.5.sp,
-                                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                                            text = when (env) {
+                                                SystemEnvironment.RESTAURANT_APP -> "Nexo İşletme"
+                                                SystemEnvironment.CUSTOMER_WEBSITE -> "Müşteri Menü"
+                                                SystemEnvironment.SUPER_ADMIN -> "SaaS Admin"
+                                            },
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
                                             color = if (isSelected) Color.White else NexoTextSecondary,
                                             maxLines = 1
                                         )

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 import com.example.data.local.dao.*
 import com.example.data.local.entity.*
 
@@ -15,11 +16,13 @@ import com.example.data.local.entity.*
         CategoryEntity::class,
         MenuItemEntity::class,
         RestaurantTableEntity::class,
-        CachedOrderEntity::class
+        CachedOrderEntity::class,
+        OrderEntity::class
     ],
-    version = 2,
+    version = 5,
     exportSchema = false
 )
+@TypeConverters(OrderTypeConverters::class)
 abstract class NexoRoomDatabase : RoomDatabase() {
 
     abstract fun businessDao(): BusinessDao
@@ -29,6 +32,7 @@ abstract class NexoRoomDatabase : RoomDatabase() {
     abstract fun menuItemDao(): MenuItemDao
     abstract fun restaurantTableDao(): RestaurantTableDao
     abstract fun cachedOrderDao(): CachedOrderDao
+    abstract fun orderDao(): OrderDao
 
     companion object {
         @Volatile

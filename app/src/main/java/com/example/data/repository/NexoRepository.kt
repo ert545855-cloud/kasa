@@ -1,9 +1,16 @@
 package com.example.data.repository
 
+import com.example.data.local.entity.OrderEntity
+import com.example.data.local.entity.OrderItemRecord
 import com.example.data.model.*
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 data class CartItemInput(
@@ -14,6 +21,12 @@ data class CartItemInput(
 )
 
 object NexoRepository {
+
+    private var boundOrderRepository: OrderRepository? = null
+
+    fun bindOrderRepository(repo: OrderRepository) {
+        boundOrderRepository = repo
+    }
 
     val defaultBusinessId = "biz-casa-cafe"
 
@@ -150,6 +163,9 @@ object NexoRepository {
     private val _staff = MutableStateFlow<List<Employee>>(emptyList())
     val staff: StateFlow<List<Employee>> = _staff.asStateFlow()
 
+    private val _staffInvitations = MutableStateFlow<List<StaffInvitation>>(emptyList())
+    val staffInvitations: StateFlow<List<StaffInvitation>> = _staffInvitations.asStateFlow()
+
     private val _aiLogs = MutableStateFlow<List<AiGenerationLog>>(emptyList())
     val aiLogs: StateFlow<List<AiGenerationLog>> = _aiLogs.asStateFlow()
 
@@ -241,6 +257,58 @@ object NexoRepository {
                 biz.copy(plan = newPlan)
             } else biz
         }
+    }
+
+    fun activatePaidSubscription(businessId: String, plan: PlanType) {
+        _businesses.value = _businesses.value.map { biz ->
+            if (biz.id == businessId) {
+                biz.copy(
+                    plan = plan,
+                    subscriptionStatus = SubscriptionStatus.PAID_ACTIVE,
+                    isPaid = true
+                )
+            } else biz
+        }
+    }
+
+    fun start15DayTrial(businessId: String) {
+        val now = System.currentTimeMillis()
+        val trialEnd = now + 15L * 24 * 60 * 60 * 1000L
+        _businesses.value = _businesses.value.map { biz ->
+            if (biz.id == businessId) {
+                biz.copy(
+                    subscriptionStatus = SubscriptionStatus.TRIAL_ACTIVE,
+                    trialStartDate = now,
+                    trialEndDate = trialEnd,
+                    isPaid = false
+                )
+            } else biz
+        }
+    }
+
+    fun simulateTrialDaysRemaining(businessId: String, daysLeft: Int) {
+        val now = System.currentTimeMillis()
+        val fakeEnd = now + (daysLeft.toLong() * 24L * 60L * 60L * 1000L)
+        _businesses.value = _businesses.value.map { biz ->
+            if (biz.id == businessId) {
+                biz.copy(
+                    subscriptionStatus = if (daysLeft <= 0) SubscriptionStatus.EXPIRED else SubscriptionStatus.TRIAL_ACTIVE,
+                    trialEndDate = fakeEnd,
+                    isPaid = false
+                )
+            } else biz
+        }
+    }
+
+    fun registerOrUpdateBusinessModel(biz: Business) {
+        val exists = _businesses.value.any { it.id == biz.id }
+        if (exists) {
+            _businesses.value = _businesses.value.map { if (it.id == biz.id) biz else it }
+        } else {
+            _businesses.value = _businesses.value + biz
+            loadSeedData(biz.id)
+        }
+        _activeBusinessId.value = biz.id
     }
 
     // ========================================================
@@ -362,6 +430,38 @@ object NexoRepository {
             }
         }
 
+        // Sync to Room + Firestore OrderRepository
+        boundOrderRepository?.let { repo ->
+            val entity = OrderEntity(
+                id = newOrder.id,
+                restaurant_id = newOrder.businessId,
+                table_id = newOrder.tableNumber?.toString() ?: "0",
+                items = orderItems.map { oi ->
+                    OrderItemRecord(
+                        product_id = oi.productId,
+                        name = oi.productName,
+                        price = oi.unitPrice,
+                        quantity = oi.quantity,
+                        notes = oi.selectedOptions.joinToString(", "),
+                        total_price = oi.total
+                    )
+                },
+                total_amount = newOrder.total,
+                status = newOrder.status.name,
+                order_number = newOrder.orderNumber,
+                created_at = newOrder.createdAtTimestamp,
+                updated_at = System.currentTimeMillis(),
+                customer_name = newOrder.customerName ?: "",
+                customer_phone = newOrder.customerPhone ?: "",
+                notes = newOrder.notes ?: "",
+                payment_status = newOrder.paymentMethod.name,
+                order_type = if ((newOrder.tableNumber ?: 0) > 0) "DINE_IN" else "TAKEAWAY"
+            )
+            CoroutineScope(Dispatchers.IO).launch {
+                repo.submitOrder(entity)
+            }
+        }
+
         return Result.success(newOrder)
     }
 
@@ -369,6 +469,13 @@ object NexoRepository {
         val order = _orders.value.firstOrNull { it.id == orderId } ?: return
         val updated = order.copy(status = newStatus)
         _orders.value = _orders.value.map { if (it.id == orderId) updated else it }
+
+        // Sync status to Room + Firestore OrderRepository
+        boundOrderRepository?.let { repo ->
+            CoroutineScope(Dispatchers.IO).launch {
+                repo.updateOrderStatus(orderId, newStatus.name)
+            }
+        }
 
         // Update corresponding table status
         if (order.tableNumber != null) {
@@ -403,6 +510,48 @@ object NexoRepository {
                 customerName = order.customerName,
                 bizId = order.businessId
             )
+        }
+    }
+
+    fun syncFromOrderEntity(entity: OrderEntity) {
+        val mappedStatus = when (entity.status.uppercase()) {
+            "CONFIRMED", "ACCEPTED" -> OrderStatus.ACCEPTED
+            "PREPARING" -> OrderStatus.PREPARING
+            "READY" -> OrderStatus.READY
+            "COMPLETED" -> OrderStatus.COMPLETED
+            "CANCELLED" -> OrderStatus.CANCELLED
+            else -> OrderStatus.PENDING
+        }
+
+        val existing = _orders.value.firstOrNull { it.id == entity.id }
+        if (existing != null) {
+            if (existing.status != mappedStatus) {
+                updateOrderStatus(entity.id, mappedStatus)
+            }
+        } else {
+            val order = Order(
+                id = entity.id,
+                businessId = entity.restaurant_id,
+                orderNumber = entity.order_number,
+                tableNumber = entity.table_id.toIntOrNull(),
+                customerName = entity.customer_name.ifBlank { "Misafir" },
+                customerPhone = entity.customer_phone.ifBlank { null },
+                items = entity.items.map { item ->
+                    OrderItem(
+                        productId = item.product_id,
+                        productName = item.name,
+                        unitPrice = item.price,
+                        quantity = item.quantity,
+                        total = item.total_price
+                    )
+                },
+                subtotal = entity.total_amount,
+                total = entity.total_amount,
+                status = mappedStatus,
+                notes = entity.notes.ifBlank { null },
+                createdAtTimestamp = entity.created_at
+            )
+            _orders.value = listOf(order) + _orders.value
         }
     }
 
@@ -502,10 +651,84 @@ object NexoRepository {
 
     fun addCustomer(customer: Customer) {
         _customers.value = listOf(customer) + _customers.value
+        syncCustomerToFirebase(customer)
     }
 
     fun updateCustomer(customer: Customer) {
         _customers.value = _customers.value.map { if (it.id == customer.id) customer else it }
+        syncCustomerToFirebase(customer)
+    }
+
+    fun sendStaffInvitation(
+        businessId: String,
+        email: String,
+        name: String,
+        role: UserRole,
+        note: String = ""
+    ): StaffInvitation {
+        val invite = StaffInvitation(
+            businessId = businessId,
+            email = email.trim(),
+            name = name.trim(),
+            role = role,
+            note = note.trim()
+        )
+        _staffInvitations.value = listOf(invite) + _staffInvitations.value
+        syncInvitationToFirebase(invite)
+        return invite
+    }
+
+    fun cancelStaffInvitation(inviteId: String) {
+        _staffInvitations.value = _staffInvitations.value.filter { it.id != inviteId }
+    }
+
+    private fun syncCustomerToFirebase(customer: Customer) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val db = FirebaseFirestore.getInstance()
+                db.collection("customers").document(customer.id).set(
+                    mapOf(
+                        "id" to customer.id,
+                        "businessId" to customer.businessId,
+                        "name" to customer.name,
+                        "phone" to customer.phone,
+                        "email" to (customer.email ?: ""),
+                        "notes" to (customer.notes ?: ""),
+                        "totalSpent" to customer.totalSpent,
+                        "orderCount" to customer.orderCount,
+                        "loyaltyPoints" to customer.loyaltyPoints,
+                        "lastOrderAt" to customer.lastOrderAt,
+                        "tags" to customer.tags,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            } catch (e: Exception) {
+                android.util.Log.w("NexoRepository", "Firestore customer sync skipped: ${e.message}")
+            }
+        }
+    }
+
+    private fun syncInvitationToFirebase(invitation: StaffInvitation) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val db = FirebaseFirestore.getInstance()
+                db.collection("invitations").document(invitation.id).set(
+                    mapOf(
+                        "id" to invitation.id,
+                        "businessId" to invitation.businessId,
+                        "email" to invitation.email,
+                        "name" to invitation.name,
+                        "role" to invitation.role.name,
+                        "note" to invitation.note,
+                        "token" to invitation.token,
+                        "status" to invitation.status,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            } catch (e: Exception) {
+                android.util.Log.w("NexoRepository", "Firestore invitation sync skipped: ${e.message}")
+            }
+        }
     }
 
     // ========================================================
@@ -604,14 +827,38 @@ object NexoRepository {
 
     fun addStaff(employee: Employee) {
         _staff.value = _staff.value + employee
+        syncStaffToFirebase(employee)
     }
 
     fun updateStaff(employee: Employee) {
         _staff.value = _staff.value.map { if (it.id == employee.id) employee else it }
+        syncStaffToFirebase(employee)
     }
 
     fun deleteStaff(staffId: String) {
         _staff.value = _staff.value.filter { it.id != staffId }
+    }
+
+    private fun syncStaffToFirebase(employee: Employee) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val db = FirebaseFirestore.getInstance()
+                db.collection("staff").document(employee.id).set(
+                    mapOf(
+                        "id" to employee.id,
+                        "businessId" to employee.businessId,
+                        "name" to employee.name,
+                        "email" to employee.email,
+                        "phone" to employee.phone,
+                        "role" to employee.role.name,
+                        "permissions" to employee.permissions.map { it.name },
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            } catch (e: Exception) {
+                android.util.Log.w("NexoRepository", "Firestore staff sync skipped: ${e.message}")
+            }
+        }
     }
 
     // ========================================================

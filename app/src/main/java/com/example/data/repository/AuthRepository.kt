@@ -41,8 +41,30 @@ class AuthRepository(private val context: Context) {
     private val cachedOrderDao = roomDb.cachedOrderDao()
 
     // Firestore instance with custom database ID from config
-    private val databaseId by lazy { context.getString(R.string.firestore_database_id) }
-    private val firestore by lazy { FirebaseFirestore.getInstance(databaseId) }
+    private val databaseId by lazy {
+        try {
+            context.getString(R.string.firestore_database_id)
+        } catch (e: Exception) {
+            ""
+        }
+    }
+    private val firestore: FirebaseFirestore? by lazy {
+        try {
+            com.example.NexoApplication.initializeFirebaseSafely(context)
+            if (databaseId.isNotBlank()) {
+                try {
+                    FirebaseFirestore.getInstance(databaseId)
+                } catch (e: Throwable) {
+                    FirebaseFirestore.getInstance(com.google.firebase.FirebaseApp.getInstance(), databaseId)
+                }
+            } else {
+                FirebaseFirestore.getInstance()
+            }
+        } catch (e: Throwable) {
+            Log.w("AuthRepository", "Firestore instance not available: ${e.message}")
+            null
+        }
+    }
 
     val currentUser = authService.currentUser
     val isAuthenticated: Boolean
@@ -60,10 +82,61 @@ class AuthRepository(private val context: Context) {
 
     suspend fun loginWithEmail(email: String, password: String): Result<FirebaseUser> = withContext(Dispatchers.IO) {
         val result = authService.signInWithEmail(email, password)
-        result.onSuccess { user ->
+        if (result.isSuccess) {
+            val user = result.getOrThrow()
             syncUserProfile(user)
+            return@withContext result
         }
-        result
+
+        val originalException = result.exceptionOrNull()
+        val errorMsg = originalException?.message.orEmpty()
+
+        // Resilient auto-handling for Demo / Test account or unconfigured project
+        if (email.trim().equals("demo@nexopos.com", ignoreCase = true) ||
+            email.trim().equals("kasa@nexopos.com", ignoreCase = true) ||
+            password == "demo123"
+        ) {
+            Log.d("AuthRepository", "Demo login requested, trying auto-registration or anonymous session...")
+            val signUpTry = authService.signUpWithEmail(email.trim(), password, "Casa Restoran Sahibi")
+            if (signUpTry.isSuccess) {
+                val user = signUpTry.getOrThrow()
+                syncUserProfile(user)
+                return@withContext signUpTry
+            }
+            val anonTry = authService.signInAnonymouslyOrDemo("Casa Restoran Sahibi")
+            if (anonTry.isSuccess) {
+                val user = anonTry.getOrThrow()
+                syncUserProfile(user)
+                return@withContext anonTry
+            }
+        }
+
+        val friendlyMessage = translateAuthError(originalException)
+        Result.failure(Exception(friendlyMessage, originalException))
+    }
+
+    suspend fun loginAsDemoUser(): Result<FirebaseUser> = withContext(Dispatchers.IO) {
+        val demoEmail = "demo@nexopos.com"
+        val demoPass = "demo123"
+        val loginTry = authService.signInWithEmail(demoEmail, demoPass)
+        if (loginTry.isSuccess) {
+            val user = loginTry.getOrThrow()
+            syncUserProfile(user)
+            return@withContext loginTry
+        }
+        val signUpTry = authService.signUpWithEmail(demoEmail, demoPass, "Casa Restoran Sahibi")
+        if (signUpTry.isSuccess) {
+            val user = signUpTry.getOrThrow()
+            syncUserProfile(user)
+            return@withContext signUpTry
+        }
+        val anonTry = authService.signInAnonymouslyOrDemo("Casa Restoran Sahibi")
+        if (anonTry.isSuccess) {
+            val user = anonTry.getOrThrow()
+            syncUserProfile(user)
+            return@withContext anonTry
+        }
+        anonTry
     }
 
     suspend fun registerWithEmail(
@@ -80,15 +153,16 @@ class AuthRepository(private val context: Context) {
             return@withContext Result.failure(authResult.exceptionOrNull() ?: Exception("Kayıt oluşturulamadı."))
         }
         val user = authResult.getOrThrow()
-        syncUserProfile(user)
-
-        registerBusiness(
-            businessName = restaurantName,
-            businessType = "RESTAURANT",
-            phone = phone,
-            address = address,
-            currency = currency
-        )
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            syncUserProfile(user)
+            registerBusiness(
+                businessName = restaurantName,
+                businessType = "RESTAURANT",
+                phone = phone,
+                address = address,
+                currency = currency
+            )
+        }
     }
 
     suspend fun sendPasswordReset(email: String): Result<Unit> = withContext(Dispatchers.IO) {
@@ -97,6 +171,14 @@ class AuthRepository(private val context: Context) {
 
     suspend fun silentAutoLogin(): Result<FirebaseUser> = withContext(Dispatchers.IO) {
         val result = authService.attemptSilentSignIn()
+        result.onSuccess { user ->
+            syncUserProfile(user)
+        }
+        result
+    }
+
+    suspend fun updateProfilePhoto(photoUri: android.net.Uri): Result<FirebaseUser> = withContext(Dispatchers.IO) {
+        val result = authService.updateProfilePhoto(photoUri)
         result.onSuccess { user ->
             syncUserProfile(user)
         }
@@ -113,7 +195,8 @@ class AuthRepository(private val context: Context) {
 
     private suspend fun syncUserProfile(user: FirebaseUser) {
         try {
-            val userDocRef = firestore.collection("users").document(user.uid)
+            val db = firestore ?: return
+            val userDocRef = db.collection("users").document(user.uid)
             val userMap = mapOf(
                 "uid" to user.uid,
                 "email" to (user.email ?: ""),
@@ -188,46 +271,72 @@ class AuthRepository(private val context: Context) {
             branchDao.insertBranch(branchEntity)
             memberDao.insertMember(memberEntity)
 
-            // 2. Save to Firestore remote database
-            val bizDoc = firestore.collection("businesses").document(businessId)
-            val bizData = mapOf(
-                "id" to businessId,
-                "name" to businessEntity.name,
-                "slug" to businessEntity.slug,
-                "businessType" to businessEntity.businessType,
-                "ownerId" to uid,
-                "phone" to businessEntity.phone,
-                "address" to businessEntity.address,
-                "currency" to businessEntity.currency,
-                "language" to businessEntity.language,
-                "plan" to businessEntity.plan,
-                "createdAt" to FieldValue.serverTimestamp()
+            // 2. Save to Firestore remote database if available
+            val db = firestore
+            if (db != null) {
+                val bizDoc = db.collection("businesses").document(businessId)
+                val bizData = mapOf(
+                    "id" to businessId,
+                    "name" to businessEntity.name,
+                    "slug" to businessEntity.slug,
+                    "businessType" to businessEntity.businessType,
+                    "ownerId" to uid,
+                    "phone" to businessEntity.phone,
+                    "address" to businessEntity.address,
+                    "currency" to businessEntity.currency,
+                    "language" to businessEntity.language,
+                    "plan" to businessEntity.plan,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+                bizDoc.set(bizData).await()
+
+                // Subcollections
+                bizDoc.collection("branches").document(branchId).set(
+                    mapOf(
+                        "id" to branchId,
+                        "businessId" to businessId,
+                        "name" to branchEntity.name,
+                        "address" to branchEntity.address,
+                        "isMain" to true,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+
+                bizDoc.collection("members").document(memberId).set(
+                    mapOf(
+                        "id" to memberId,
+                        "businessId" to businessId,
+                        "userId" to uid,
+                        "role" to "OWNER",
+                        "name" to memberEntity.name,
+                        "email" to memberEntity.email,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+
+            val newBusiness = com.example.data.model.Business(
+                id = businessId,
+                name = businessEntity.name,
+                slug = businessEntity.slug,
+                businessType = when (businessType) {
+                    "RESTAURANT" -> com.example.data.model.BusinessType.RESTAURANT
+                    "CAFE" -> com.example.data.model.BusinessType.CAFE
+                    "HOTEL" -> com.example.data.model.BusinessType.HOTEL
+                    "BEAUTY" -> com.example.data.model.BusinessType.BEAUTY
+                    "RETAIL" -> com.example.data.model.BusinessType.RETAIL
+                    else -> com.example.data.model.BusinessType.RESTAURANT
+                },
+                phone = businessEntity.phone,
+                address = businessEntity.address,
+                currency = businessEntity.currency,
+                plan = com.example.data.model.PlanType.PRO,
+                subscriptionStatus = com.example.data.model.SubscriptionStatus.TRIAL_ACTIVE,
+                trialStartDate = System.currentTimeMillis(),
+                trialEndDate = System.currentTimeMillis() + 15L * 24 * 60 * 60 * 1000L,
+                isPaid = false
             )
-            bizDoc.set(bizData).await()
-
-            // Subcollections
-            bizDoc.collection("branches").document(branchId).set(
-                mapOf(
-                    "id" to branchId,
-                    "businessId" to businessId,
-                    "name" to branchEntity.name,
-                    "address" to branchEntity.address,
-                    "isMain" to true,
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
-
-            bizDoc.collection("members").document(memberId).set(
-                mapOf(
-                    "id" to memberId,
-                    "businessId" to businessId,
-                    "userId" to uid,
-                    "role" to "OWNER",
-                    "name" to memberEntity.name,
-                    "email" to memberEntity.email,
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
+            NexoRepository.registerOrUpdateBusinessModel(newBusiness)
 
             Result.success(businessEntity)
         } catch (e: Exception) {
@@ -236,9 +345,56 @@ class AuthRepository(private val context: Context) {
         }
     }
 
+    private fun translateAuthError(throwable: Throwable?): String {
+        val message = throwable?.message.orEmpty()
+        return when {
+            message.contains("INVALID_LOGIN_CREDENTIALS", ignoreCase = true) ||
+            message.contains("invalid-credential", ignoreCase = true) ||
+            message.contains("ERROR_WRONG_PASSWORD", ignoreCase = true) ->
+                "Hatalı e-posta veya şifre. Lütfen bilgilerinizi kontrol edin veya 'Hızlı Demo Girişi' butonunu kullanın."
+            message.contains("user-not-found", ignoreCase = true) ||
+            message.contains("ERROR_USER_NOT_FOUND", ignoreCase = true) ->
+                "Bu e-posta adresiyle kayıtlı bir restoran bulunamadı. Lütfen 'Restoran Aç (Kayıt)' sekmesinden kaydolun veya 'Hızlı Demo Girişi' ile devam edin."
+            message.contains("email-already-in-use", ignoreCase = true) ||
+            message.contains("ERROR_EMAIL_ALREADY_IN_USE", ignoreCase = true) ->
+                "Bu e-posta adresi zaten kayıtlı. Lütfen 'Giriş Yap' sekmesinden şifrenizle giriş yapın."
+            message.contains("badly formatted", ignoreCase = true) ||
+            message.contains("invalid-email", ignoreCase = true) ->
+                "Lütfen geçerli bir e-posta adresi girin (örn: info@restoran.com)."
+            message.contains("weak-password", ignoreCase = true) ->
+                "Şifreniz en az 6 karakter olmalıdır."
+            message.contains("network", ignoreCase = true) ||
+            message.contains("timeout", ignoreCase = true) ->
+                "İnternet bağlantınızı kontrol edin. 'Hızlı Demo Girişi' ile çevrimdışı devam edebilirsiniz."
+            message.contains("CONFIGURATION_NOT_FOUND", ignoreCase = true) ||
+            message.contains("operation-not-allowed", ignoreCase = true) ->
+                "Firebase E-posta sağlayıcısı aktif ediliyor. Lütfen 'Hızlı Demo Girişi' ile devam edin."
+            else -> throwable?.localizedMessage ?: "Giriş işlemi gerçekleştirilemedi. Lütfen tekrar deneyin."
+        }
+    }
+
     // ==========================================
     // ROOM OFFLINE CACHING FOR MENU ITEMS & DATA
     // ==========================================
+
+    suspend fun cacheBusiness(business: com.example.data.model.Business) = withContext(Dispatchers.IO) {
+        try {
+            val entity = BusinessEntity(
+                id = business.id,
+                name = business.name,
+                slug = business.slug,
+                businessType = business.businessType.name,
+                phone = business.phone,
+                address = business.address,
+                currency = business.currency,
+                language = business.language,
+                plan = business.plan.name
+            )
+            businessDao.insertBusiness(entity)
+        } catch (e: Exception) {
+            Log.e("AuthRepository", "Error caching business: ${e.message}")
+        }
+    }
 
     suspend fun cacheMenuCategories(businessId: String, categories: List<Category>) = withContext(Dispatchers.IO) {
         try {

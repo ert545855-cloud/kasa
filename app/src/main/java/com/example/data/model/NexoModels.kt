@@ -63,6 +63,7 @@ enum class UserRole(val titleTr: String) {
     OWNER("İşletme Sahibi"),
     MANAGER("Müdür / Yönetici"),
     EMPLOYEE("Çalışan / Garson"),
+    WAITER("Garson"),
     CASHIER("Kasiyer"),
     KITCHEN("Mutfak Şefi"),
     RECEPTION("Resepsiyonist")
@@ -77,6 +78,12 @@ enum class NexoPermission(val label: String) {
     VIEW_ANALYTICS("Finans & Raporları Gör"),
     MANAGE_STAFF("Personel Ekle & Yetkilendir"),
     MANAGE_SETTINGS("İşletme Ayarlarını Değiştir")
+}
+
+enum class SubscriptionStatus(val labelTr: String) {
+    TRIAL_ACTIVE("15 Günlük Deneme Sürümü"),
+    PAID_ACTIVE("Aktif Lisans"),
+    EXPIRED("Deneme Süresi Doldu")
 }
 
 data class Business(
@@ -98,8 +105,24 @@ data class Business(
     val websiteDomain: String = "$slug.nexo.business",
     val brandColorHex: String = "#D97706",
     val tagline: String = "Özel Kahveler & Taze Lezzetler",
-    val createdAt: Long = System.currentTimeMillis()
-)
+    val createdAt: Long = System.currentTimeMillis(),
+    val subscriptionStatus: SubscriptionStatus = SubscriptionStatus.TRIAL_ACTIVE,
+    val trialStartDate: Long = System.currentTimeMillis(),
+    val trialEndDate: Long = System.currentTimeMillis() + 15L * 24 * 60 * 60 * 1000L,
+    val isPaid: Boolean = false
+) {
+    val trialDaysRemaining: Int
+        get() {
+            if (isPaid || subscriptionStatus == SubscriptionStatus.PAID_ACTIVE) return 365
+            val now = System.currentTimeMillis()
+            if (now >= trialEndDate) return 0
+            val millisLeft = trialEndDate - now
+            return ((millisLeft / (1000L * 60 * 60 * 24)) + 1).toInt().coerceIn(0, 15)
+        }
+
+    val isTrialExpired: Boolean
+        get() = !isPaid && subscriptionStatus != SubscriptionStatus.PAID_ACTIVE && trialDaysRemaining <= 0
+}
 
 data class NexoPushNotification(
     val id: String = UUID.randomUUID().toString(),
@@ -258,6 +281,18 @@ data class Customer(
     val orderCount: Int = 0,
     val lastOrderAt: Long? = null,
     val loyaltyPoints: Int = 0
+)
+
+data class StaffInvitation(
+    val id: String = UUID.randomUUID().toString(),
+    val businessId: String,
+    val email: String,
+    val name: String,
+    val role: UserRole = UserRole.WAITER,
+    val note: String = "",
+    val token: String = UUID.randomUUID().toString().take(8).uppercase(),
+    val status: String = "PENDING", // PENDING, ACCEPTED, CANCELLED
+    val createdAtTimestamp: Long = System.currentTimeMillis()
 )
 
 data class StockItem(

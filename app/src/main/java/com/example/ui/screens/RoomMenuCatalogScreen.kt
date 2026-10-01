@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,25 +12,37 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.local.NexoRoomDatabase
+import com.example.data.local.entity.BusinessEntity
 import com.example.data.local.entity.CategoryEntity
 import com.example.data.local.entity.MenuItemEntity
 import com.example.data.repository.NexoRepository
 import com.example.ui.theme.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
+/**
+ * High-performance Composable screen that displays menu items retrieved directly
+ * from local Room SQLite database, with category-based filtering, search, and availability controls.
+ */
 @Composable
 fun RoomMenuCatalogScreen(
     onNavigateBack: (() -> Unit)? = null
@@ -47,45 +60,68 @@ fun RoomMenuCatalogScreen(
     var searchQuery by remember { mutableStateOf("") }
     var onlyAvailableFilter by remember { mutableStateOf(false) }
 
-    // If Room cache is empty on first load, seed with current repository items
-    LaunchedEffect(menuItems.size) {
-        if (menuItems.isEmpty()) {
-            val repoCategories = NexoRepository.categories.value
-            val repoProducts = NexoRepository.products.value
-            val catEntities = repoCategories.map { c ->
-                CategoryEntity(
-                    id = c.id,
-                    businessId = business.id,
-                    nameTr = c.name,
-                    nameEn = c.name,
-                    sortOrder = c.sortOrder,
-                    iconName = c.iconName,
-                    isActive = c.isActive
+    // Seed Room database safely once per business without foreign key crashes or infinite loops
+    LaunchedEffect(business.id) {
+        withContext(Dispatchers.IO) {
+            try {
+                val bizEntity = BusinessEntity(
+                    id = business.id,
+                    name = business.name,
+                    slug = business.slug,
+                    businessType = business.businessType.name,
+                    phone = business.phone,
+                    address = business.address,
+                    currency = business.currency,
+                    language = business.language,
+                    plan = business.plan.name
                 )
+                roomDb.businessDao().insertBusiness(bizEntity)
+
+                val repoCategories = NexoRepository.categories.value.filter { it.businessId == business.id }
+                val repoProducts = NexoRepository.products.value.filter { it.businessId == business.id }
+
+                if (repoCategories.isNotEmpty()) {
+                    val catEntities = repoCategories.map { c ->
+                        CategoryEntity(
+                            id = c.id,
+                            businessId = business.id,
+                            nameTr = c.name,
+                            nameEn = c.name,
+                            sortOrder = c.sortOrder,
+                            iconName = c.iconName,
+                            isActive = c.isActive
+                        )
+                    }
+                    roomDb.categoryDao().insertCategories(catEntities)
+                }
+
+                if (repoProducts.isNotEmpty()) {
+                    val itemEntities = repoProducts.map { p ->
+                        MenuItemEntity(
+                            id = p.id,
+                            businessId = business.id,
+                            categoryId = p.categoryId,
+                            name = p.name,
+                            description = p.description,
+                            price = p.price,
+                            imageUrl = p.imageUrl,
+                            isAvailable = p.isAvailable,
+                            isFeatured = p.isFeatured,
+                            preparationMinutes = 15,
+                            allergens = p.allergens.joinToString(","),
+                            foodCost = p.ingredientCost,
+                            lastUpdated = System.currentTimeMillis()
+                        )
+                    }
+                    roomDb.menuItemDao().insertMenuItems(itemEntities)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("RoomMenuCatalog", "Room catalog initial sync notice: ${e.message}")
             }
-            val itemEntities = repoProducts.map { p ->
-                MenuItemEntity(
-                    id = p.id,
-                    businessId = business.id,
-                    categoryId = p.categoryId,
-                    name = p.name,
-                    description = p.description,
-                    price = p.price,
-                    imageUrl = p.imageUrl,
-                    isAvailable = p.isAvailable,
-                    isFeatured = p.isFeatured,
-                    preparationMinutes = 15,
-                    allergens = p.allergens.joinToString(","),
-                    foodCost = p.ingredientCost,
-                    lastUpdated = System.currentTimeMillis()
-                )
-            }
-            roomDb.categoryDao().insertCategories(catEntities)
-            roomDb.menuItemDao().insertMenuItems(itemEntities)
         }
     }
 
-    // Filter items
+    // Filter items with derived state to maximize scrolling performance
     val filteredItems = remember(menuItems, selectedCategoryId, searchQuery, onlyAvailableFilter) {
         menuItems.filter { item ->
             val matchesCategory = selectedCategoryId == null || item.categoryId == selectedCategoryId
@@ -101,6 +137,7 @@ fun RoomMenuCatalogScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
             .padding(14.dp)
     ) {
         // Header
@@ -113,19 +150,19 @@ fun RoomMenuCatalogScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (onNavigateBack != null) {
                         IconButton(onClick = onNavigateBack, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "Geri")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri")
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                     }
                     Text(
-                        text = "Yerel Menü Kataloğu",
+                        text = "Veritabanı Menü Kataloğu",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground
                     )
                 }
                 Text(
-                    text = "Room SQLite veritabanından çekilen çevrimdışı menü öğeleri",
+                    text = "Room SQLite & KSP ile yerel depolanan menü",
                     style = MaterialTheme.typography.bodySmall,
                     color = NexoTextSecondary
                 )
@@ -152,12 +189,12 @@ fun RoomMenuCatalogScreen(
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            placeholder = { Text("Menüde ürün veya içerik ara...") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            placeholder = { Text("Menüde ara (Örn: Latte, Cheesecake, Burger)...", fontSize = 13.sp) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
             trailingIcon = {
                 if (searchQuery.isNotBlank()) {
                     IconButton(onClick = { searchQuery = "" }) {
-                        Icon(Icons.Default.Close, contentDescription = "Temizle")
+                        Icon(Icons.Default.Close, contentDescription = "Temizle", modifier = Modifier.size(18.dp))
                     }
                 }
             },
@@ -225,7 +262,7 @@ fun RoomMenuCatalogScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Card-based Menu Items List
+        // Card-based Menu Items List with optimizations
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -254,7 +291,7 @@ fun RoomMenuCatalogScreen(
                         item = item,
                         currency = business.currency,
                         onToggleAvailability = {
-                            coroutineScope.launch {
+                            coroutineScope.launch(Dispatchers.IO) {
                                 roomDb.menuItemDao().updateMenuItem(item.copy(isAvailable = !item.isAvailable))
                             }
                         }
@@ -271,6 +308,13 @@ fun RoomMenuItemCard(
     currency: String,
     onToggleAvailability: () -> Unit
 ) {
+    val productDrawableId = when {
+        item.name.contains("Latte", ignoreCase = true) -> R.drawable.img_latte
+        item.name.contains("Cheesecake", ignoreCase = true) -> R.drawable.img_cheesecake
+        item.name.contains("Burger", ignoreCase = true) || item.name.contains("Sandviç", ignoreCase = true) -> R.drawable.img_burger
+        else -> null
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -284,11 +328,44 @@ fun RoomMenuItemCard(
     ) {
         Row(
             modifier = Modifier
-                .padding(14.dp)
+                .padding(12.dp)
                 .fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            // Thumbnail image or icon
+            if (productDrawableId != null) {
+                Image(
+                    painter = painterResource(id = productDrawableId),
+                    contentDescription = item.name,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        if (item.categoryId.contains("drink") || item.categoryId.contains("coffee"))
+                            Icons.Default.LocalCafe
+                        else if (item.categoryId.contains("dessert"))
+                            Icons.Default.Cake
+                        else
+                            Icons.Default.RestaurantMenu,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -315,17 +392,17 @@ fun RoomMenuItemCard(
                 }
 
                 if (item.description.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(3.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = item.description,
                         fontSize = 11.sp,
                         color = NexoTextSecondary,
-                        lineHeight = 15.sp,
+                        lineHeight = 14.sp,
                         maxLines = 2
                     )
                 }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
                 // Detail badges (Preparation time, Allergens, Food cost)
                 Row(
@@ -366,14 +443,14 @@ fun RoomMenuItemCard(
                 }
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
             // Price & Availability Toggle
             Column(horizontalAlignment = Alignment.End) {
                 Text(
                     text = "%.2f %s".format(item.price, currency),
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.primary
                 )
 
@@ -396,7 +473,3 @@ fun RoomMenuItemCard(
         }
     }
 }
-
-fun Modifier.scale(scale: Float): Modifier = this.then(
-    Modifier.padding(4.dp * (1f - scale))
-)
